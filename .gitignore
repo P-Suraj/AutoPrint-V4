@@ -45,3 +45,6 @@ desktop.ini
 supabase/_combined.sql
 test-results/
 playwright-report/
+
+.vercel
+.env*.local

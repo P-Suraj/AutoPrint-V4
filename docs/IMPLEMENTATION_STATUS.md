@@ -11,7 +11,8 @@
 | 1 Print spike | physical printer, 30 normal prints, completion rule, engine chosen | **NOT PASSED.** Virtual printer only (founder-allowed). 30/30 normal prints, completion rule v1 written, engine provisional. Physical-printer run, duplex/colour and real failure drills outstanding. See `docs/PRINT_SPIKE_REPORT.md` |
 | 2 Contracts | see checklist below | Done except the C# client |
 | 3 Backend slice | customer API built and tested locally (45 integration tests) against a real PostgreSQL; Supabase storage backend verified live; **database not yet created on Supabase and nothing deployed** | In progress |
-| 4-10 | not started | |
+| 4 Customer web | Built. 24 unit tests (estimator matches Python on 21 shared vectors) and 6 end-to-end browser tests pass against the real API, real PostgreSQL and real file storage on this PC | **Gate NOT passed**: not tested on a real Android or iPhone, not tested against the deployed API, 60-second timing not measured. Emulation only (Edge, Pixel 7 profile) |
+| 5-10 | not started | |
 
 ## Phase 2 checklist
 
@@ -41,6 +42,13 @@
 - `supabase/_combined.sql` (generated, git-ignored) is verified to apply once to an empty database and to refuse a second run.
 - NOT done: apply the schema to Supabase, deploy to Vercel, measure latency, GitHub Actions maintenance cron.
 - Blocked: this network cannot reach Supabase's SQL ports. The schema must be pasted into the SQL Editor by the founder.
+
+## Phase 4 progress (5 Oct 2026)
+
+- `apps/web`: React + TypeScript, built from the generated API types; production build passes; main bundle 60 KB gzipped, pdf.js loaded only when a file is chosen.
+- Run the browser suite: `E2E_CHANNEL=msedge apps/api/.venv/Scripts/python.exe e2e/run_web_e2e.py` (uses Edge; or install Playwright's Chromium and drop the variable).
+- Verified in the browser: 3 pages at 2 rupees shows an estimate of 6 rupees and an exact server price of 6 rupees; the order secret is never in the URL or page text; the status page moves from waiting, to approved, to "Sent to printer."; the word "printed" never appears; cancel works before approval; an order link opened in a different browser reveals nothing; an unreachable API shows an error instead of a fake result.
+- NOT verified: real phones, Safari, slow mobile networks, the deployed API.
 
 ## Findings so far
 
