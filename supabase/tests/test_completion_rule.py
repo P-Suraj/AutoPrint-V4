@@ -74,3 +74,13 @@ def test_cancelled_at_spooler_cannot_be_reported_completed(shop, db):
     cancelled = dict(GOOD, flags_seen=["SPOOLING", "DELETING"], max_pages_printed=0)
     assert db.call("report_outcome", c["attempt_id"], c["attempt_token"], device, "completed", cancelled)["result"] == "evidence_insufficient"
     assert db.one("SELECT status FROM ap.jobs WHERE id=%s", (job_id,)) == "printing"
+
+
+def test_sql_rule_matches_the_shared_vectors_also_run_by_the_desktop_app(db):
+    """contracts/completion_vectors.json is also run against SpoolEvidence.SatisfiesRule in the desktop tests."""
+    import json
+    from pathlib import Path
+    data = json.loads((Path(__file__).resolve().parents[2] / "contracts" / "completion_vectors.json").read_text(encoding="utf-8"))
+    assert len(data["cases"]) >= 8
+    for case in data["cases"]:
+        assert supports(db, case["evidence"]) is case["expect_completed"], case["name"]

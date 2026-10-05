@@ -455,6 +455,11 @@ export interface components {
              * @description Short-lived signed URL. Never log it.
              */
             download_url: string;
+            /**
+             * Page Count
+             * @description Pages in the document; the app uses it to size the spooler wait
+             */
+            page_count?: number | null;
             /** Sha256 */
             sha256: string;
         };

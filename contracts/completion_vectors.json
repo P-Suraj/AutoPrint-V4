@@ -1,0 +1,29 @@
+{
+  "comment": "Cases for completion rule v1. Run by supabase/tests (against ap.evidence_supports_completion) and by the desktop app tests (SpoolEvidence.SatisfiesRule). Both must agree.",
+  "cases": [
+    {"name": "clean print", "expect_completed": true,
+     "evidence": {"rule_version": 1, "spooler_job_seen": true, "printing_seen": true, "left_queue": true, "flags_seen": ["SPOOLING", "PRINTING", "RETAINED"], "max_pages_printed": 3}},
+    {"name": "last page increment missed by the sampler", "expect_completed": true,
+     "evidence": {"rule_version": 1, "spooler_job_seen": true, "printing_seen": true, "left_queue": true, "flags_seen": ["PRINTING"], "max_pages_printed": 2}},
+    {"name": "never seen in the spooler", "expect_completed": false,
+     "evidence": {"rule_version": 1, "spooler_job_seen": false, "printing_seen": true, "left_queue": true, "flags_seen": ["PRINTING"], "max_pages_printed": 1}},
+    {"name": "still in the queue", "expect_completed": false,
+     "evidence": {"rule_version": 1, "spooler_job_seen": true, "printing_seen": true, "left_queue": false, "flags_seen": ["PRINTING"], "max_pages_printed": 1}},
+    {"name": "never reported printing", "expect_completed": false,
+     "evidence": {"rule_version": 1, "spooler_job_seen": true, "printing_seen": false, "left_queue": true, "flags_seen": ["SPOOLING"], "max_pages_printed": 1}},
+    {"name": "no pages printed", "expect_completed": false,
+     "evidence": {"rule_version": 1, "spooler_job_seen": true, "printing_seen": true, "left_queue": true, "flags_seen": ["PRINTING"], "max_pages_printed": 0}},
+    {"name": "cancelled at the printer also leaves the queue", "expect_completed": false,
+     "evidence": {"rule_version": 1, "spooler_job_seen": true, "printing_seen": true, "left_queue": true, "flags_seen": ["SPOOLING", "DELETING"], "max_pages_printed": 1}},
+    {"name": "error flag", "expect_completed": false,
+     "evidence": {"rule_version": 1, "spooler_job_seen": true, "printing_seen": true, "left_queue": true, "flags_seen": ["PRINTING", "ERROR"], "max_pages_printed": 2}},
+    {"name": "offline flag", "expect_completed": false,
+     "evidence": {"rule_version": 1, "spooler_job_seen": true, "printing_seen": true, "left_queue": true, "flags_seen": ["PRINTING", "OFFLINE"], "max_pages_printed": 2}},
+    {"name": "paper out flag", "expect_completed": false,
+     "evidence": {"rule_version": 1, "spooler_job_seen": true, "printing_seen": true, "left_queue": true, "flags_seen": ["PRINTING", "PAPEROUT"], "max_pages_printed": 2}},
+    {"name": "user intervention flag", "expect_completed": false,
+     "evidence": {"rule_version": 1, "spooler_job_seen": true, "printing_seen": true, "left_queue": true, "flags_seen": ["PRINTING", "USER_INTERVENTION"], "max_pages_printed": 2}},
+    {"name": "unknown rule version is never trusted", "expect_completed": false,
+     "evidence": {"rule_version": 2, "spooler_job_seen": true, "printing_seen": true, "left_queue": true, "flags_seen": ["PRINTING"], "max_pages_printed": 3}}
+  ]
+}

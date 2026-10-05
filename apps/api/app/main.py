@@ -346,7 +346,8 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
         return s.ClaimResponse(
             status="claimed", job_id=res["job_id"], attempt_id=res["attempt_id"], attempt_token=res["attempt_token"],
             spooler_job_name=res["spooler_job_name"], lease_expires_at=res["lease_expires_at"],
-            document=s.DocumentAccess(download_url=storage.create_download_url(doc["object_key"]), sha256=doc["sha256"], byte_size=doc["bytes"]),
+            document=s.DocumentAccess(download_url=storage.create_download_url(doc["object_key"]), sha256=doc["sha256"],
+                                      byte_size=doc["bytes"], page_count=doc["pages"]),
             options=s.PrintOptions(copies=res["options"]["copies"], color=res["options"]["color"], duplex=res["options"]["duplex"],
                                    page_range=res["options"]["page_range"]))
 

@@ -213,6 +213,18 @@
             "title": "Download Url",
             "type": "string"
           },
+          "page_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pages in the document; the app uses it to size the spooler wait",
+            "title": "Page Count"
+          },
           "sha256": {
             "title": "Sha256",
             "type": "string"

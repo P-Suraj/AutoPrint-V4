@@ -233,6 +233,7 @@ class DocumentAccess(Strict):
     download_url: str = Field(description="Short-lived signed URL. Never log it.")
     sha256: str
     byte_size: int
+    page_count: Optional[int] = Field(default=None, description="Pages in the document; the app uses it to size the spooler wait")
 
 
 class ClaimResponse(Strict):
