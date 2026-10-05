@@ -230,7 +230,6 @@ INSERT INTO ap.allowed_transitions (entity, from_status, to_status, actor) VALUE
   ('order', 'draft',     'expired',   'system'),
   ('order', 'draft',     'cancelled', 'customer'),
   ('order', 'submitted', 'cancelled', 'customer'),
-  ('order', 'submitted', 'expired',   'system'),
   ('order', 'submitted', 'closed',    'system'),
   -- job
   ('job', 'awaiting_approval', 'approved',  'device'),

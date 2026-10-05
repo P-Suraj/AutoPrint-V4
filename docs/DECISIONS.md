@@ -16,7 +16,7 @@ F-1 isolated project and repo · F-2 first success target · F-3 web-only custom
 | D-3 | New Supabase project in Mumbai, database and storage only | PROPOSED |
 | D-4 | Web: React + Vite + TypeScript on new Vercel project | PROPOSED |
 | D-5 | Desktop: C# .NET WPF | APPROVED 2026-10-05 (via O-3) |
-| D-6 | Print engine decided by Phase 1 spike | PROPOSED |
+| D-6 | Print engine decided by Phase 1 spike | PROVISIONAL 2026-10-05: SumatraPDF 3.6.1 portable. Measured on a virtual printer only; the PDFium/Windows-API alternative was not compared. Re-validate on the physical printer. |
 | D-7 | Business rules in SQL transactions | PROPOSED |
 | D-8 | Upload once, validate once | PROPOSED |
 | D-9 | Previews rendered client-side | PROPOSED |
@@ -29,6 +29,8 @@ F-1 isolated project and repo · F-2 first success target · F-3 web-only custom
 | D-16 | A4 only, B&W and colour printer slots | PROPOSED |
 | D-17 | Founder operations as scripts | PROPOSED |
 | D-18 | Deploy a skeleton in Phase 3 | APPROVED 2026-10-05 |
+| C-1 | Completion rule version 1 (`docs/PRINT_SPIKE_REPORT.md`, migration 0003) | PROVISIONAL 2026-10-05: derived from a virtual printer; must be re-validated on a physical printer before Phase 8 |
+| C-2 | Founder allowed a virtual printer for Phase 1 testing (2026-10-05) | RECORDED. The Phase 1 gate still requires a physical printer and is NOT passed |
 | O-1 | Submit from anywhere | ANSWERED: yes, shop link works off-site |
 | O-2 | Payments timing | ANSWERED: no online payment before physical certification; pay-at-counter for the pilot; FinFlow after printing is proven (Phase 9) |
 | O-3 | C# codebase | ANSWERED: yes, C# / .NET / WPF |

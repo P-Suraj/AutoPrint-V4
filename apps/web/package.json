@@ -1,0 +1,12 @@
+{
+  "name": "autoprint-v4-web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "gen:client": "openapi-typescript ../../contracts/openapi.json -o ../../contracts/clients/ts/schema.d.ts"
+  },
+  "devDependencies": {
+    "openapi-typescript": "^7.9.1"
+  }
+}

@@ -128,7 +128,7 @@ BEGIN
     END LOOP;
     EXIT WHEN NOT EXISTS (SELECT 1 FROM ap.orders WHERE shop_id = s.id AND short_code = new_code AND status IN ('draft', 'submitted'));
     tries := tries + 1;
-    IF tries > 20 THEN RETURN jsonb_build_object('result', 'busy'); END IF;
+    IF tries > 20 THEN RETURN jsonb_build_object('result', 'try_again'); END IF;
   END LOOP;
   INSERT INTO ap.orders (shop_id, short_code, secret_hash, expires_at, access_until)
   VALUES (s.id, new_code, p_secret_hash, now() + interval '1 hour', now() + interval '48 hours')

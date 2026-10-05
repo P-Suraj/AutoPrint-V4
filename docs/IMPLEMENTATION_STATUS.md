@@ -1,26 +1,58 @@
 # Implementation Status
 
-**Current phase:** 0 — Approvals and repository
-**Phase 0 gate:** NOT PASSED
+**Last updated:** 5 October 2026
+**Current phase:** 2 (contracts) substantially done; 1 (print spike) done on a virtual printer only; 3 not started.
 
-## Done
+## Phase gates
 
-- 5 Oct 2026: founder answered O-1 to O-10 and approved D-18 (see DECISIONS.md).
-- 5 Oct 2026: folder `F:\Projects\AutoPrint-V4` created outside the V3 directory; `git init`; remote set to `https://github.com/P-Suraj/AutoPrint-V4.git`; `.gitignore`, README and docs skeleton added.
+| Phase | Gate | State |
+|---|---|---|
+| 0 Approvals and repository | all decisions recorded, pushed, founder confirms | Mostly done. O-items answered, D-5/D-12/D-15/D-18 approved; the other D-items are still PROPOSED. Founder written confirmation not given as a single statement |
+| 1 Print spike | physical printer, 30 normal prints, completion rule, engine chosen | **NOT PASSED.** Virtual printer only (founder-allowed). 30/30 normal prints, completion rule v1 written, engine provisional. Physical-printer run, duplex/colour and real failure drills outstanding. See `docs/PRINT_SPIKE_REPORT.md` |
+| 2 Contracts | see checklist below | Done except the C# client |
+| 3 Backend slice | not started | |
+| 4-10 | not started | |
 
-## Gate checklist
+## Phase 2 checklist
 
-- [~] Every decision has a recorded answer. All O-items answered or deliberately deferred (O-4 to Phase 3, O-7 pending; O-10 answered). D-5, D-12, D-15, D-18 approved; the other D-items are still PROPOSED.
-- [x] `git remote -v` shows only the V4 repository.
-- [x] No V3 URL, key or project reference in code or config (none exist yet). `docs/BUILD_PHASES.md` section 9 names V3 file paths as read-only reference and is excluded from this check.
-- [ ] Founder confirms in writing.
-- [ ] First commit pushed to GitHub. (Local commit only; waiting on founder go-ahead to push.)
+- [x] Migrations apply cleanly to an empty PostgreSQL, from scratch, twice (`test_migrations_apply_to_empty_database_twice`).
+- [x] Every allowed transition has a test, and each state has a refusal test (`test_transition_matrix.py`; the table and the scenarios are compared).
+- [x] Concurrency: two and six simultaneous claims give one winner; 15 cancel-versus-claim races give exactly one winner each.
+- [x] `contracts/openapi.json` generated from the declared routes; stale-file test.
+- [x] TypeScript client generated with no manual edits; stale-file test.
+- [ ] **C# client**: .NET 8 SDK is now installed; generation is not set up (Phase 5).
+- [x] `docs/CONTRACTS.md` and `docs/ARCHITECTURE.md` written. **Founder review pending.**
+- [x] Error catalog covers every SQL result code (test).
+- [x] Pricing with worked examples (test), including 3 pages at 2 rupees = 6 rupees.
+
+## Verified results (5 Oct 2026)
+
+`apps/api/.venv/Scripts/python.exe -m pytest` runs all suites against a throwaway PostgreSQL 17 on port 55432.
+
+- Database tests (state machine, completion rule, transition matrix): pass
+- API tests (pricing, contract checks): pass
+- Full count is recorded in the commit message of the latest commit.
+
+## Findings so far
+
+- V3's bundled `SumatraPDF.exe` is the installer, not the portable program (identical hash). V3 could never have reliably printed through it.
+- "Job left the spooler queue" is not evidence of printing: a cancelled job also leaves. Fixed in the rule.
+- A killed print process can leave an orphan job stuck in the spooler.
+- A nonexistent printer name makes Sumatra hang rather than fail.
+- A bug the tests caught: the completion rule failed open when evidence lacked `max_pages_printed`. Fixed.
+
+## Not verified
+
+Physical printing in any form. Duplex and colour. Anything on Supabase or a deployed host: no V4 cloud resource exists yet (Phase 3 needs founder-created accounts).
 
 ## Blocked on founder
 
-- O-7: pilot shop, Windows PC/version, printer models, connection type, physical access. Blocks Phase 1.
-- Approve or change the remaining PROPOSED D-items (technical; Phases 1-3 will test them).
+- Physical printer access for the real Phase 1 drills (the Kyocera on this PC is offline).
+- Creating the V4 Supabase project and an API host account (Phase 3). The agent must not use any V3 resource.
+- Review of `docs/CONTRACTS.md` and `docs/ARCHITECTURE.md`.
 
-## Not started
+## Machine changes made on this PC (clean up when finished)
 
-Phases 1–10.
+- A local printer named **AutoPrint-Spike-PDF** and a printer port at `F:\Projects\AutoPrint-V4\spikes\_out\spike_out.pdf`. One orphan spooler job is stuck on it. Remove with `Remove-Printer` and `Remove-PrinterPort`.
+- A throwaway PostgreSQL 17 data directory at `.localdb/` (ignored by git), started on port 55432.
+- .NET 8 SDK installed with winget.
