@@ -29,7 +29,10 @@ F-1 isolated project and repo · F-2 first success target · F-3 web-only custom
 | D-16 | A4 only, B&W and colour printer slots | PROPOSED |
 | D-17 | Founder operations as scripts | PROPOSED |
 | D-18 | Deploy a skeleton in Phase 3 | APPROVED 2026-10-05 |
-| C-1 | Completion rule version 1 (`docs/PRINT_SPIKE_REPORT.md`, migration 0003) | PROVISIONAL 2026-10-05: derived from a virtual printer; must be re-validated on a physical printer before Phase 8 |
+| C-1 | Completion rule version 2 (`docs/PRINT_SPIKE_REPORT.md` addendum, migration 0006). Version 1 also required pages printed >= 1; dropped because Windows reported 0 for a job that printed | PROVISIONAL 2026-10-05: derived from a virtual printer; must be re-validated on a physical printer before Phase 8 |
+| C-3 | Desktop app: hand-written typed wire models plus a contract test against `contracts/openapi.json`, instead of a generated C# client (D-13 adjusted). NSwag turned every nullable field into an empty class and would have silently lost values | DECIDED 2026-10-05 |
+| C-4 | Desktop app reads the spooler through the native winspool API, not System.Printing (thread affinity crashed async code) | DECIDED 2026-10-05 |
+| C-5 | Device pairing is initiated by the shop PC (migration 0005): the app makes its own secret and shows a short code; the founder approves it. The one-time enrollment code remains as a fallback | DECIDED 2026-10-05 |
 | C-2 | Founder allowed a virtual printer for Phase 1 testing (2026-10-05) | RECORDED. The Phase 1 gate still requires a physical printer and is NOT passed |
 | O-1 | Submit from anywhere | ANSWERED: yes, shop link works off-site |
 | O-2 | Payments timing | ANSWERED: no online payment before physical certification; pay-at-counter for the pilot; FinFlow after printing is proven (Phase 9) |

@@ -20,7 +20,7 @@ public class OrchestratorTests
         Assert.Equal(RunKind.Completed, res.Kind);
         Assert.Equal(["claim", "sent", "report:Completed"], rig.Api.Calls);
         var evidence = rig.Api.Reports.Single().Evidence;
-        Assert.Equal(1, evidence["rule_version"]);
+        Assert.Equal(2, evidence["rule_version"]);
         Assert.Equal(true, evidence["spooler_job_seen"]);
         Assert.Equal(true, evidence["left_queue"]);
         Assert.Equal(AttemptState.Reported, rig.Journal.StateOf(claim.AttemptId));

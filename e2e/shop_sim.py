@@ -16,7 +16,7 @@ import uuid
 
 import psycopg2
 
-GOOD = {"rule_version": 1, "spooler_job_seen": True, "printing_seen": True, "left_queue": True,
+GOOD = {"rule_version": 2, "spooler_job_seen": True, "printing_seen": True, "left_queue": True,
         "flags_seen": ["SPOOLING", "PRINTING"], "max_pages_printed": 3, "expected_pages": 3}
 RULES = {"bw": {"simplex": [{"from_sides": 1, "to_sides": None, "paise_per_side": 200}],
                 "duplex": [{"from_sides": 1, "to_sides": None, "paise_per_side": 120}]},

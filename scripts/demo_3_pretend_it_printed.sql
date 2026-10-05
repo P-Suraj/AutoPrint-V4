@@ -11,7 +11,7 @@ begin
   if c->>'result' <> 'claimed' then raise exception 'nothing to print: %', c->>'result'; end if;
   perform ap.mark_sent((c->>'attempt_id')::uuid, c->>'attempt_token', d);
   perform ap.report_outcome((c->>'attempt_id')::uuid, c->>'attempt_token', d, 'completed',
-    '{"rule_version":1,"spooler_job_seen":true,"printing_seen":true,"left_queue":true,"flags_seen":["SPOOLING","PRINTING"],"max_pages_printed":1}'::jsonb);
+    '{"rule_version":2,"spooler_job_seen":true,"printing_seen":true,"left_queue":true,"flags_seen":["SPOOLING","PRINTING"],"max_pages_printed":1}'::jsonb);
 end $$;
 
 select j.status as job_status from ap.jobs j join ap.shops s on s.id = j.shop_id

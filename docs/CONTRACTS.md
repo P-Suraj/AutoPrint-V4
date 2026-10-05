@@ -97,10 +97,10 @@ All calls are HTTPS requests with the device headers. A WebSocket carries only w
 9. **Clean up** the local file, and delete any spooler job it left behind.
 10. **After a restart or crash.** Read the journal. Any attempt that may have reached the spooler is reported `uncertain`. Look for leftover spooler jobs named `apjob_*` and report them; never reprint.
 
-Evidence sent with `completed` (rule version 1; see `docs/PRINT_SPIKE_REPORT.md`):
+Evidence sent with `completed` (rule version 2; see `docs/PRINT_SPIKE_REPORT.md`, addendum). The pages-printed number is informational only and is not required:
 
 ```json
-{"rule_version": 1, "spooler_job_seen": true, "printing_seen": true, "left_queue": true,
+{"rule_version": 2, "spooler_job_seen": true, "printing_seen": true, "left_queue": true,
  "flags_seen": ["SPOOLING", "PRINTING", "RETAINED"], "max_pages_printed": 3, "expected_pages": 3,
  "seconds_in_queue": 12.4}
 ```

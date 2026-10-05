@@ -6,7 +6,7 @@ import pytest
 import pdfs
 from dbtools import sha
 
-GOOD = {"rule_version": 1, "spooler_job_seen": True, "printing_seen": True, "left_queue": True,
+GOOD = {"rule_version": 2, "spooler_job_seen": True, "printing_seen": True, "left_queue": True,
         "flags_seen": ["SPOOLING", "PRINTING"], "max_pages_printed": 3, "expected_pages": 3}
 
 

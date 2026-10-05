@@ -113,3 +113,15 @@ A human then chooses: mark completed, mark failed, or retry. A retry is the only
 3. Run the real drills: printer off, cable out, paper out, jam, cancel at the printer, PC restart mid-job.
 4. Record which flags the driver actually raises for each failure. If a jam produces no flag, the rule cannot detect it and F-8 needs the founder's decision.
 5. Note: SumatraPDF is licensed GPL-3.0. Shipping it as a separate program is a common arrangement but requires including its license and a source link; confirm before distributing.
+
+
+## Addendum, 5 October 2026: what the C# desktop app found
+
+Findings from running the real engine (SumatraPDF) and a .NET observer against the same virtual printer. Still **virtual printer only**; the physical-printer gate is not passed.
+
+1. **The pages-printed counter is unreliable, so completion rule v2 no longer requires it** (migration 0006). A job that did print (the output file exists, with the right page count) was reported by Windows with 0 pages printed for its entire time in the queue. Real printer drivers often report no count until the end. Requiring "at least 1 page printed" would have forced a person to resolve jobs that printed correctly. Version 2 keeps every other safeguard: found by unique name, seen printing, seen leaving the queue, and no error or deleting flag. The count is still recorded, as information.
+2. **`System.Printing` cannot be used from async code.** Its objects belong to the thread that created them; the app crashed with "the calling thread cannot access this object because a different thread owns it". The app now calls the native spooler API directly (OpenPrinter, EnumJobs, SetJob), exactly what the spike measured.
+3. A job cancelled at the spooler is still not judged completed, now confirmed in C# against the real spooler (test `A_job_cancelled_at_the_spooler_is_not_reported_completed`).
+4. Sumatra's SHA-256 is checked before every print, because V3 shipped the installer under the name `SumatraPDF.exe`. The expected hash is that of the official portable 3.6.1 (64-bit) build, downloaded from sumatrapdfreader.org and not independently verified against a publisher checksum.
+
+Still open for the physical printer: duplex and colour, real failure flags (jam, paper out, offline), power-off and cable drills, and whether the real driver reports PRINTING at all. If it does not, completion rule v2 would never be satisfied and F-8 needs the founder's decision.

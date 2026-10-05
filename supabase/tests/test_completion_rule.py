@@ -6,7 +6,7 @@ import pytest
 from test_state_machine import approved_job, claim
 
 GOOD = {
-    "rule_version": 1, "spooler_job_seen": True, "printing_seen": True, "left_queue": True,
+    "rule_version": 2, "spooler_job_seen": True, "printing_seen": True, "left_queue": True,
     "flags_seen": ["SPOOLING", "PRINTING", "RETAINED"], "max_pages_printed": 3, "expected_pages": 3,
 }
 
@@ -19,16 +19,18 @@ def test_good_evidence_is_accepted(db):
     assert supports(db, GOOD) is True
 
 
-def test_missed_last_page_increment_is_still_accepted(db):
-    # spike: 4 of 37 jobs left the queue before the final PagesPrinted sample
+def test_the_pages_printed_counter_is_informational_only(db):
+    # spike: 4 of 37 jobs left the queue before the final count; 5 Oct: Windows reported 0 for a job that printed
     assert supports(db, dict(GOOD, max_pages_printed=2, expected_pages=3)) is True
+    assert supports(db, dict(GOOD, max_pages_printed=0)) is True
+    no_counter = {k: v for k, v in GOOD.items() if k != "max_pages_printed"}
+    assert supports(db, no_counter) is True
 
 
 @pytest.mark.parametrize("change", [
     {"spooler_job_seen": False},          # spike: Sumatra killed before spooling
     {"left_queue": False},                # spike: paused queue, job stays
     {"printing_seen": False},
-    {"max_pages_printed": 0},
     {"flags_seen": ["SPOOLING", "DELETING"]},           # spike: cancelled at the spooler also leaves the queue
     {"flags_seen": ["PRINTING", "ERROR"]},
     {"flags_seen": ["PRINTING", "OFFLINE"]},
@@ -36,14 +38,15 @@ def test_missed_last_page_increment_is_still_accepted(db):
     {"flags_seen": ["PRINTING", "USER_INTERVENTION"]},
     {"flags_seen": ["PRINTING", "BLOCKED_DEVQ"]},
     {"flags_seen": "PRINTING"},           # wrong type
-    {"rule_version": 2},                  # unknown rule version is never trusted
+    {"rule_version": 3},                  # an unknown (future) rule version is never trusted
+    {"rule_version": 1},                  # the retired version is not accepted either
     {"spooler_job_seen": "true"},         # strings are not booleans
 ])
 def test_each_missing_or_bad_signal_blocks_completion(db, change):
     assert supports(db, dict(GOOD, **change)) is False
 
 
-@pytest.mark.parametrize("missing", ["rule_version", "spooler_job_seen", "printing_seen", "left_queue", "flags_seen", "max_pages_printed"])
+@pytest.mark.parametrize("missing", ["rule_version", "spooler_job_seen", "printing_seen", "left_queue", "flags_seen"])
 def test_every_required_field_is_required(db, missing):
     e = copy.deepcopy(GOOD)
     del e[missing]
@@ -64,7 +67,7 @@ def test_full_lifecycle_to_completed_closes_the_order(shop, db):
     assert r == {"result": "ok", "job_status": "completed"}
     assert db.one("SELECT status FROM ap.jobs WHERE id=%s", (job_id,)) == "completed"
     assert db.one("SELECT status FROM ap.orders WHERE id=%s", (order["order_id"],)) == "closed"
-    assert db.one("SELECT evidence->>'rule_version' FROM ap.print_attempts WHERE id=%s", (c["attempt_id"],)) == "1"
+    assert db.one("SELECT evidence->>'rule_version' FROM ap.print_attempts WHERE id=%s", (c["attempt_id"],)) == "2"
 
 
 def test_cancelled_at_spooler_cannot_be_reported_completed(shop, db):

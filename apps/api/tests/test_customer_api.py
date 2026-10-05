@@ -292,7 +292,7 @@ def test_customer_text_after_completion_never_says_printed(flow, shop, raw_db):
     raw_db.call("approve_job", job_id, device)
     c = raw_db.call("claim_next_job", device, 300)
     raw_db.call("mark_sent", c["attempt_id"], c["attempt_token"], device)
-    ev = {"rule_version": 1, "spooler_job_seen": True, "printing_seen": True, "left_queue": True,
+    ev = {"rule_version": 2, "spooler_job_seen": True, "printing_seen": True, "left_queue": True,
           "flags_seen": ["PRINTING"], "max_pages_printed": 1}
     assert raw_db.call("report_outcome", c["attempt_id"], c["attempt_token"], device, "completed", ev)["result"] == "ok"
     v = flow.view().json()

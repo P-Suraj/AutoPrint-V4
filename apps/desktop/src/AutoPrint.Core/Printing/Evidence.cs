@@ -4,21 +4,21 @@ using AutoPrint.Core.Shop;
 namespace AutoPrint.Core.Printing;
 
 /// <summary>
-/// What the app observed in the Windows spooler. Mirrors completion rule version 1 (docs/PRINT_SPIKE_REPORT.md,
-/// supabase/migrations/0003). The SERVER applies the rule; this type only reports facts and predicts the answer
+/// What the app observed in the Windows spooler. Mirrors completion rule version 2 (docs/PRINT_SPIKE_REPORT.md,
+/// supabase/migrations/0006). The SERVER applies the rule; this type only reports facts and predicts the answer
 /// so the app never reports "completed" for something the server would refuse.
 /// </summary>
 public sealed record SpoolEvidence(
     bool SpoolerJobSeen, bool PrintingSeen, bool LeftQueue, IReadOnlyList<string> FlagsSeen,
     int MaxPagesPrinted, int ExpectedPages, double SecondsInQueue)
 {
-    public const int RuleVersion = 1;
+    public const int RuleVersion = 2;
 
     public bool HasBadFlag => FlagsSeen.Any(SpoolerFlags.Bad.Contains);
     public bool WasCancelledAtPrinter => FlagsSeen.Contains("DELETING") || FlagsSeen.Contains("DELETED");
 
     public bool SatisfiesRule =>
-        SpoolerJobSeen && PrintingSeen && LeftQueue && !HasBadFlag && MaxPagesPrinted >= 1;
+        SpoolerJobSeen && PrintingSeen && LeftQueue && !HasBadFlag;     // pages printed is informational (migration 0006)
 
     public IDictionary<string, object?> ToWire(string? reason = null)
     {

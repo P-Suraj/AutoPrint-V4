@@ -102,15 +102,15 @@ public class VectorTests
         foreach (var c in doc.RootElement.GetProperty("cases").EnumerateArray())
         {
             var e = c.GetProperty("evidence");
-            if (e.GetProperty("rule_version").GetInt32() != 1) continue;   // the server also rejects unknown versions
+            if (e.GetProperty("rule_version").GetInt32() != 2) continue;   // the server also rejects unknown versions
             var ev = new SpoolEvidence(
                 e.GetProperty("spooler_job_seen").GetBoolean(), e.GetProperty("printing_seen").GetBoolean(), e.GetProperty("left_queue").GetBoolean(),
                 e.GetProperty("flags_seen").EnumerateArray().Select(x => x.GetString()!).ToArray(),
-                e.GetProperty("max_pages_printed").GetInt32(), 3, 1);
+                e.TryGetProperty("max_pages_printed", out var mp) ? mp.GetInt32() : 0, 3, 1);
             Assert.True(c.GetProperty("expect_completed").GetBoolean() == ev.SatisfiesRule, c.GetProperty("name").GetString());
             n++;
         }
-        Assert.True(n >= 8);
+        Assert.True(n >= 10);
     }
 }
 
@@ -135,6 +135,8 @@ public class ContractTests
         ("AckResponse", typeof(AckResponse)), ("JobStatusResponse", typeof(JobStatusResponse)), ("RejectRequest", typeof(RejectRequest)),
         ("ResolveRequest", typeof(ResolveRequest)), ("EnrollRequest", typeof(EnrollRequest)), ("EnrollResponse", typeof(EnrollResponse)),
         ("PrintOptions", typeof(PrintOptions)),
+        ("PairStartRequest", typeof(PairStartRequest)), ("PairStartResponse", typeof(PairStartResponse)),
+        ("PairPollRequest", typeof(PairPollRequest)), ("PairPollResponse", typeof(PairPollResponse)),
     }.Select(t => new object[] { t.Item1, t.Item2 });
 
     [Theory, MemberData(nameof(Types))]
