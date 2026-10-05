@@ -23,8 +23,11 @@ def sha256_hex(text: str) -> str:
 
 
 class Database:
-    def __init__(self, url: str, min_conn: int = 1, max_conn: int = 10):
-        self._pool = psycopg2.pool.ThreadedConnectionPool(min_conn, max_conn, url)
+    def __init__(self, url: str, min_conn: int = 0, max_conn: int = 10):
+        # min_conn=0: connect on first use, so the process starts and /health answers even when the
+        # database is unreachable. /health/ready then reports the database honestly instead of the
+        # whole function crashing at import.
+        self._pool = psycopg2.pool.ThreadedConnectionPool(min_conn, max_conn, url, connect_timeout=10)
 
     @contextmanager
     def _conn(self) -> Iterator[Any]:
