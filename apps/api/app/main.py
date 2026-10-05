@@ -380,6 +380,36 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
         res = check(db.call("report_outcome", attempt_id, body.attempt_token, x_device_id, body.outcome.value, body.evidence))
         return s.OutcomeResponse(job_status=res.get("job_status") or ("needs_attention" if body.outcome.value == "uncertain" else body.outcome.value))
 
+    # ------------------------------------------------------------ shop owner dashboard (X-Shop-Key)
+    # The key is the credential of one shop login (method "link" today; phone/email later map to the same key check).
+    shop = APIRouter(prefix="/v1/shop", tags=["shop-owner"], responses=ERR)
+
+    @shop.get("/me", response_model=s.ShopMe, operation_id="shopMe")
+    def shop_me(x_shop_key: str = Header(...)):
+        res = check(db.call("shop_login_resolve", sha256_hex(x_shop_key)))
+        return s.ShopMe(shop_code=res["shop_code"], shop_name=res["shop_name"])
+
+    @shop.get("/pair/{pair_code}", response_model=s.ShopPairLookup, operation_id="shopPairLookup")
+    def shop_pair_lookup(pair_code: str, x_shop_key: str = Header(...)):
+        res = check(db.call("shop_pair_lookup", sha256_hex(x_shop_key), pair_code))
+        return s.ShopPairLookup(display_name=res["display_name"], expired=res["expired"], approved=res["approved"], shop_name=res["shop_name"])
+
+    @shop.post("/pair/approve", response_model=s.ShopPairApproved, operation_id="shopPairApprove")
+    def shop_pair_approve(body: s.ShopPairApproveRequest, x_shop_key: str = Header(...)):
+        res = check(db.call("shop_pair_approve", sha256_hex(x_shop_key), body.pair_code))
+        return s.ShopPairApproved(device_id=res["device_id"], display_name=res["display_name"])
+
+    @shop.get("/devices", response_model=s.ShopDeviceList, operation_id="shopDevices")
+    def shop_devices(x_shop_key: str = Header(...)):
+        res = check(db.call("shop_devices", sha256_hex(x_shop_key)))
+        return s.ShopDeviceList(devices=[s.ShopDevice(device_id=d["device_id"], name=d["name"], last_seen_at=d["last_seen_at"], revoked=d["revoked"]) for d in res["devices"]])
+
+    @shop.post("/devices/{device_id}/revoke", status_code=204, operation_id="shopDeviceRevoke")
+    def shop_device_revoke(device_id: UUID, x_shop_key: str = Header(...)):
+        check(db.call("shop_device_revoke", sha256_hex(x_shop_key), device_id))
+        return Response(status_code=204)
+
+    app.include_router(shop)
     app.include_router(customer)
     app.include_router(agent)
 

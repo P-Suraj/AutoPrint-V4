@@ -86,6 +86,16 @@ def revoke_device(conn, device_id: str) -> None:
             raise SystemExit("no active device with that id")
 
 
+def issue_shop_link(conn, shop_code: str, label: str) -> str:
+    key = secrets.token_hex(32)
+    with conn, conn.cursor() as cur:
+        cur.execute("SELECT ap.shop_login_create(%s, 'link', %s, %s)", (shop_code, sha256_hex(key), label))
+        result = cur.fetchone()[0]
+    if result["result"] != "ok":
+        raise SystemExit(f"could not create a login: {result['result']}")
+    return key
+
+
 def show_pairing(conn, code: str) -> dict:
     with conn, conn.cursor() as cur:
         cur.execute("SELECT ap.pair_lookup(%s)", (code,))
@@ -107,6 +117,7 @@ def main(argv=None) -> int:
     a = sub.add_parser("jobs"); a.add_argument("--shop", required=True); a.add_argument("--hours", type=int, default=24)
     a = sub.add_parser("revoke-device"); a.add_argument("--device", required=True)
     a = sub.add_parser("show-pairing"); a.add_argument("--code", required=True)
+    a = sub.add_parser("issue-shop-link"); a.add_argument("--shop", required=True); a.add_argument("--label", default="owner")
     a = sub.add_parser("approve-pairing"); a.add_argument("--code", required=True); a.add_argument("--shop", required=True)
     args = p.parse_args(argv)
     conn = connect()
@@ -127,6 +138,10 @@ def main(argv=None) -> int:
                 print(*row, sep="  ")
         elif args.cmd == "revoke-device":
             revoke_device(conn, args.device); print("revoked")
+        elif args.cmd == "issue-shop-link":
+            key = issue_shop_link(conn, args.shop, args.label)
+            print("Private dashboard link (shown once; anyone with it can manage this shop, so hand it over in person or by a private chat):")
+            print(f"  https://autoprint-v4.vercel.app/shop#key={key}")
         elif args.cmd == "show-pairing":
             r = show_pairing(conn, args.code)
             if r["result"] != "ok":

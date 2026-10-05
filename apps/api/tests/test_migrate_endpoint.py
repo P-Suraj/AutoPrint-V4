@@ -12,18 +12,16 @@ from dbtools import MIGRATIONS, build_database, drop_database
 
 def test_migrate_applies_pending_files_once_and_is_idempotent(tmp_path):
     # a database that has everything except the newest migration, as the live one did before it was applied.
-    # Newest is 0006 (completion rule v2): restore the v1 rule text from 0003 so the migration has something to change.
+    # Newest is 0007 (shop logins): remove its objects so the migration has something to create.
     newest = MIGRATIONS[-1].stem
-    assert newest == "0006_completion_rule_v2", "update this test when a newer migration is added"
+    assert newest == "0007_shop_logins", "update this test when a newer migration is added"
     name = "v4_mig_" + uuid.uuid4().hex[:8]
     url = build_database(name)
     c = psycopg2.connect(url); c.autocommit = True
     cur = c.cursor()
-    cur.execute(MIGRATIONS[2].read_text(encoding="utf-8"))                      # 0003: the v1 rule
-    v2_evidence = ('{"rule_version":2,"spooler_job_seen":true,"printing_seen":true,"left_queue":true,'
-                   '"flags_seen":["PRINTING"],"max_pages_printed":0}')
-    cur.execute("SELECT ap.evidence_supports_completion(%s::jsonb)", (v2_evidence,))
-    assert cur.fetchone()[0] is False                                           # the old rule refuses version 2 evidence
+    cur.execute("DROP TABLE ap.shop_logins CASCADE")
+    cur.execute("DO $$ DECLARE r record; BEGIN FOR r IN SELECT p.oid::regprocedure AS f FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace "
+                "WHERE n.nspname='ap' AND p.proname LIKE 'shop\_%' LOOP EXECUTE 'DROP FUNCTION ' || r.f; END LOOP; END $$")
     cur.execute("CREATE TABLE ap.schema_migrations (id text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())")
     for f in MIGRATIONS[:-1]:
         cur.execute("INSERT INTO ap.schema_migrations (id) VALUES (%s)", (f.stem,))
@@ -38,8 +36,8 @@ def test_migrate_applies_pending_files_once_and_is_idempotent(tmp_path):
             assert ok.json()["applied_now"] == [newest]
             again = client.post("/v1/internal/migrate", headers={"X-Maintenance-Token": "m" * 40}).json()
             assert again["applied_now"] == [] and again["applied_total"][-1] == newest
-        cur.execute("SELECT ap.evidence_supports_completion(%s::jsonb)", (v2_evidence,))
-        assert cur.fetchone()[0] is True                                        # and the migration really changed behaviour
+        cur.execute("SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname='ap' AND proname LIKE 'shop\_%'")
+        assert cur.fetchone()[0] == 7                                           # and the migration really created its functions
     finally:
         c.close()
         drop_database(name)

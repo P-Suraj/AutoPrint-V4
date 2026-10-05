@@ -69,3 +69,18 @@ export async function uploadPdf(url: string, headers: Record<string, string>, fi
 }
 
 export { secretHeader };
+
+// ---- shop owner dashboard (/shop). The key comes from the private link and is kept in this browser only.
+const shopKey = (key: string) => ({ "X-Shop-Key": key });
+
+export const shopApi = {
+  me: (key: string) => call(() => client.GET("/v1/shop/me", { params: { header: { "x-shop-key": key } } })),
+  lookup: (key: string, code: string) =>
+    call(() => client.GET("/v1/shop/pair/{pair_code}", { params: { path: { pair_code: code }, header: { "x-shop-key": key } } })),
+  approve: (key: string, code: string) =>
+    call(() => client.POST("/v1/shop/pair/approve", { params: { header: { "x-shop-key": key } }, body: { pair_code: code } })),
+  devices: (key: string) => call(() => client.GET("/v1/shop/devices", { params: { header: { "x-shop-key": key } } })),
+  revoke: (key: string, id: string) =>
+    call(() => client.POST("/v1/shop/devices/{device_id}/revoke", { params: { path: { device_id: id }, header: { "x-shop-key": key } } })),
+};
+export { shopKey };

@@ -219,6 +219,38 @@ class PairPollResponse(Strict):
     shop_name: Optional[str] = None
 
 
+class ShopMe(Strict):
+    shop_code: str
+    shop_name: str
+
+
+class ShopPairLookup(Strict):
+    display_name: str
+    expired: bool
+    approved: bool
+    shop_name: str
+
+
+class ShopPairApproveRequest(Strict):
+    pair_code: str = Field(min_length=8, max_length=9)
+
+
+class ShopPairApproved(Strict):
+    device_id: UUID
+    display_name: str
+
+
+class ShopDevice(Strict):
+    device_id: UUID
+    name: str
+    last_seen_at: Optional[datetime] = None
+    revoked: bool
+
+
+class ShopDeviceList(Strict):
+    devices: list[ShopDevice]
+
+
 class LeaseResponse(Strict):
     lease_expires_at: datetime
 
