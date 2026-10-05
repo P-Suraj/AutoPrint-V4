@@ -21,6 +21,7 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        if (e.Args.Length == 2 && e.Args[0] == "--selftest-preview") { SelfTestPreview(e.Args[1]); return; }
         _single = new Mutex(true, @"Local\AutoPrint.V4.SingleInstance", out bool first);
         if (!first) { Shutdown(); return; }                     // already running: the first copy owns the tray
 
@@ -34,6 +35,20 @@ public partial class App : Application
         _tray.ContextMenuStrip = menu;
         _window.Start();
         if (!Array.Exists(e.Args, a => a == "--background")) ShowWindow();
+    }
+
+    /// <summary>Support tool: renders page 1 of a PDF with the same code the preview uses, writes the result to app.log, exits.</summary>
+    private async void SelfTestPreview(string pdfPath)
+    {
+        int code = 0;
+        try
+        {
+            var r = await PdfRender.OpenAsync(pdfPath);
+            var img = await r.PageAsync(0, 800);
+            Log($"selftest-preview ok: pages={r.PageCount} first page {img.PixelWidth}x{img.PixelHeight}");
+        }
+        catch (Exception ex) { Log("selftest-preview FAILED: " + ex.GetType().Name + " " + ex.Message); code = 1; }
+        Shutdown(code);
     }
 
     public void ShowWindow() { _window!.Show(); _window.WindowState = WindowState.Normal; _window.Activate(); }

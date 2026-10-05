@@ -8,6 +8,7 @@
         <TextBlock x:Name="BwWarn" Foreground="Firebrick" TextWrapping="Wrap" Margin="0,0,0,12"/>
         <TextBlock Text="Colour printer (optional)" FontWeight="SemiBold"/>
         <ComboBox x:Name="ColorBox" Margin="0,4,0,16" Padding="6"/>
+        <CheckBox x:Name="StartupBox" Content="Start AutoPrint when I sign in to Windows" Margin="0,0,0,12"/>
         <TextBlock x:Name="Result" Foreground="DimGray" TextWrapping="Wrap" Margin="0,0,0,12"/>
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
             <Button Content="Print a test page" Click="OnTest" Margin="0,0,8,0" Padding="14,7"/>

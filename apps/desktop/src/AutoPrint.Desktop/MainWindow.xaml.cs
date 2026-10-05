@@ -132,6 +132,7 @@ public partial class MainWindow : Window
         switch (j.Status)
         {
             case JobStatus.AwaitingApproval:
+                row.Children.Add(PreviewBtn(j, noPrinter));
                 row.Children.Add(Btn("Approve and print", () => _api!.ApproveAsync(j.JobId, _cts.Token), primary: true, enabled: !noPrinter));
                 row.Children.Add(Btn("Reject", () => _api!.RejectAsync(j.JobId, null, _cts.Token)));
                 break;
@@ -146,6 +147,18 @@ public partial class MainWindow : Window
         }
         panel.Children.Add(row);
         return new Border { Background = Brushes.White, CornerRadius = new CornerRadius(10), Padding = new Thickness(16), Margin = new Thickness(0, 0, 0, 10), Child = panel };
+    }
+
+    private Button PreviewBtn(JobSummary j, bool noPrinter)
+    {
+        var b = new Button { Content = "Preview" };
+        b.Click += (_, _) =>
+        {
+            var w = new PreviewWindow(j, _api!, App.Http, canDecide: !noPrinter) { Owner = this };
+            w.ShowDialog();
+            if (w.Decided) _agent?.Wake();
+        };
+        return b;
     }
 
     private Button Btn(string text, Func<Task> action, bool primary = false, bool enabled = true)

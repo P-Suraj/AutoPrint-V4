@@ -23,6 +23,7 @@ public interface IShopApi
     Task ApproveAsync(Guid jobId, CancellationToken ct);
     Task RejectAsync(Guid jobId, string? reason, CancellationToken ct);
     Task<JobStatus> ResolveAsync(Guid jobId, Resolution resolution, string? note, CancellationToken ct);
+    Task<DocumentAccess> DocumentAsync(Guid jobId, CancellationToken ct);
     Task<Claim?> ClaimAsync(CancellationToken ct);
     Task<DateTimeOffset> RenewAsync(Guid attemptId, string token, int seconds, CancellationToken ct);
     Task MarkSentAsync(Guid attemptId, string token, CancellationToken ct);
@@ -78,6 +79,10 @@ public sealed class ShopApi : IShopApi
 
     public async Task<JobStatus> ResolveAsync(Guid jobId, Resolution resolution, string? note, CancellationToken ct)
     { using var r = Req(HttpMethod.Post, $"/jobs/{jobId}/resolve", new ResolveRequest(resolution, note)); return (await SendAsync<JobStatusResponse>(_http, r, ct)).Status; }
+
+    /// <summary>A short-lived link to the customer file, so the shopkeeper can look at it before approving.</summary>
+    public async Task<DocumentAccess> DocumentAsync(Guid jobId, CancellationToken ct)
+    { using var r = Req(HttpMethod.Get, $"/jobs/{jobId}/document"); return await SendAsync<DocumentAccess>(_http, r, ct); }
 
     public async Task<Claim?> ClaimAsync(CancellationToken ct)
     {

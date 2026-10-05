@@ -40,6 +40,12 @@ public sealed class FakeShopApi : IShopApi
         return Task.CompletedTask;
     }
 
+    public Task<DocumentAccess> DocumentAsync(Guid jobId, CancellationToken ct)
+    {
+        Calls.Add("document");
+        return Task.FromResult(new DocumentAccess("https://example.test/f", new string('0', 64), 1, 1));
+    }
+
     public Task<JobStatus> ReportOutcomeAsync(Guid attemptId, string token, Outcome outcome, IDictionary<string, object?> evidence, CancellationToken ct)
     {
         Calls.Add("report:" + outcome);

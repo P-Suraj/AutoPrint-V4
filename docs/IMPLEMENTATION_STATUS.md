@@ -12,7 +12,7 @@
 | 2 Contracts | see checklist below | Done except the C# client |
 | 3 Backend slice | Customer and shop APIs built, tested on a real PostgreSQL, deployed to Vercel (Mumbai) with Supabase; migrations 0001-0007 applied live | Done on free tier; cold-start latency not measured |
 | 4 Customer web | Built. 24 unit tests (estimator matches Python on 21 shared vectors) and 6 end-to-end browser tests pass against the real API, real PostgreSQL and real file storage on this PC | **Gate NOT passed**: not tested on a real Android or iPhone, not tested against the deployed API, 60-second timing not measured. Emulation only (Edge, Pixel 7 profile) |
-| 5 Windows desktop app | Core (journal, agent loop, pairing, real engine, spooler observer) with 58 tests; WPF app launches and shows a pairing code | **In progress.** Not yet done: job preview, start at sign-in, installer, end-to-end run against the live site and a printer |
+| 5 Windows desktop app | Core (journal, agent loop, pairing, real engine, spooler observer) with 58 tests; WPF app launches and shows a pairing code | **In progress.** Done: job preview, start at sign-in, installer, live end-to-end run on the virtual printer. Not yet done: physical printer, other PCs, signing |
 | 6-10 | not started | |
 
 ## Phase 2 checklist
@@ -104,6 +104,14 @@ What this proves: the whole software chain on real infrastructure. What it does 
 Found by this run, fixed: `ShopApi` set `BaseAddress` on an HttpClient already used for pairing, which throws, so the real app would have crashed right after pairing. It now builds absolute URLs. Also added `POST /v1/internal/shop-login` (maintenance token) because the Supabase database ports are not reachable from the founder's PC; it creates or revokes shop logins through the deployed API.
 
 Each run leaves one completed order on the test shop TST001 (retained until the normal cleanup).
+
+## Job preview and installer (5 Oct 2026)
+
+- **Preview:** each waiting job has a Preview button. It downloads the file (hash-checked), shows the pages with the PDF viewer built into Windows, and offers Approve and Reject inside the window. The temp file is deleted when it closes. Checked: a 3-page PDF renders correctly through the same code (`AutoPrint.exe --selftest-preview file.pdf`). Not checked: the window itself with a real queued job (that is for the founder test).
+- **Start at sign-in** is a setting (and an installer option), per user, no administrator rights.
+- **Installer:** `apps/desktop/installer/build.ps1` builds `dist/AutoPrintSetup-4.0.0.exe` (59 MB, Inno Setup 6, self-contained .NET so the shop PC needs nothing else; not packed, not trimmed). Per-user install, no administrator prompt, publisher "Suraj Pandavula", Sumatra hash verified at build time, GPL notice included. Checked: silent install, installed app runs, silent uninstall leaves no program files, V3 data untouched. Defender scan of the installer: no detection. **Not signed** (Authenticode status NotSigned), so SmartScreen will warn. Not checked: the "start at sign-in" option, upgrade over an older version, a clean PC without .NET, other Windows versions.
+- Founder test guide: `docs/TEST_THE_WINDOWS_APP.md`.
+- Machine change: Inno Setup 6 was already installed on this PC.
 
 ## Customer connection (discussed, not built)
 

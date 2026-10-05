@@ -49,3 +49,4 @@ playwright-report/
 .vercel
 .env*.local
 apps/desktop/src/AutoPrint.Desktop/tools/
+dist/

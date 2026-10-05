@@ -22,6 +22,7 @@ public partial class SettingsWindow : Window
         ColorBox.Items.Insert(0, None);
         BwBox.SelectedItem = settings.BlackWhitePrinter ?? _printers.FirstOrDefault(p => !p.IsVirtual && !p.IsOffline)?.Name;
         ColorBox.SelectedItem = settings.ColorPrinter ?? None;
+        StartupBox.IsChecked = settings.StartWithWindows;
         BwBox.SelectionChanged += (_, _) => Warn();
         Warn();
     }
@@ -54,7 +55,9 @@ public partial class SettingsWindow : Window
     {
         _settings.BlackWhitePrinter = BwBox.SelectedItem as string;
         _settings.ColorPrinter = ColorBox.SelectedItem as string is { } c && c != None ? c : null;
+        _settings.StartWithWindows = StartupBox.IsChecked == true;
         _settings.Save();
+        Settings.ApplyStartup(_settings.StartWithWindows);
         DialogResult = true;
     }
 }

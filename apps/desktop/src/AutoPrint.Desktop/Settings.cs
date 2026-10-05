@@ -11,6 +11,24 @@ public sealed class Settings
     public string? BlackWhitePrinter { get; set; }
     public string? ColorPrinter { get; set; }
 
+    /// <summary>Start AutoPrint (in the tray, no window) when this Windows user signs in. On by default: a shop PC that restarts must keep receiving jobs.</summary>
+    public bool StartWithWindows { get; set; } = true;
+
+    private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+
+    /// <summary>Per-user, no administrator rights: one value under HKCU...\Run.</summary>
+    public static void ApplyStartup(bool on)
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(RunKey);
+            if (on) key.SetValue("AutoPrint", $"\"{Environment.ProcessPath}\" --background");
+            else key.DeleteValue("AutoPrint", throwOnMissingValue: false);
+        }
+        catch (System.Security.SecurityException) { /* locked down by policy: the setting just has no effect */ }
+        catch (UnauthorizedAccessException) { }
+    }
+
     public static string Dir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AutoPrintV4");
     private static string FilePath => Path.Combine(Dir, "settings.json");
 
