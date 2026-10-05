@@ -92,3 +92,24 @@ def test_only_the_hash_of_the_key_is_stored(client, shop, api_db_url):
     cur.execute("SELECT credential_hash, method FROM ap.shop_logins")
     rows = cur.fetchall(); conn.close()
     assert all(key not in h and len(h) == 64 for h, _ in rows) and rows[-1][1] == "link"
+
+
+def test_founder_endpoint_issues_and_revokes_logins_with_the_maintenance_token(settings, shop):
+    import dataclasses
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+    with TestClient(create_app(dataclasses.replace(settings, maintenance_token="m" * 40))) as client:
+        _founder_endpoint_checks(client, shop)
+
+
+def _founder_endpoint_checks(client, shop):
+    token = {"X-Maintenance-Token": "m" * 40}
+    assert client.post("/v1/internal/shop-login", json={"shop_code": shop.code}).status_code == 401
+    assert client.post("/v1/internal/shop-login", headers={"X-Maintenance-Token": "x"}, json={"shop_code": shop.code}).status_code == 401
+    r = client.post("/v1/internal/shop-login", headers=token, json={"shop_code": shop.code, "label": "e2e"})
+    assert r.status_code == 200, r.text
+    key = r.json()["key"]
+    assert client.get("/v1/shop/me", headers=H(key)).json()["shop_code"] == shop.code
+    assert client.post("/v1/internal/shop-login", headers=token, json={"shop_code": "NOP000"}).status_code == 404
+    assert client.post("/v1/internal/shop-login", headers=token, json={"revoke_label": "e2e"}).json() == {"revoked": 1}
+    assert client.get("/v1/shop/me", headers=H(key)).status_code == 401

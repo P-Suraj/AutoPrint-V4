@@ -457,6 +457,20 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
         from app.migrate import apply_pending
         return apply_pending(settings.database_url)
 
+    @app.post("/v1/internal/shop-login", include_in_schema=False)
+    def issue_shop_login(body: dict, x_maintenance_token: str = Header("")):
+        """Founder tool: creates (method "link") or revokes a shop login without needing the database port. The key is
+        returned once and only its hash is stored. Same token as migrate; never reachable by customers or shops."""
+        require_maintenance_token(x_maintenance_token)
+        if body.get("revoke_label"):
+            n = db.one("WITH r AS (UPDATE ap.shop_logins SET revoked_at = now() WHERE label = %s AND revoked_at IS NULL RETURNING 1) SELECT count(*) FROM r",
+                       (str(body["revoke_label"])[:80],))[0]
+            return {"revoked": n}
+        shop_code, label = str(body.get("shop_code", "")), str(body.get("label", "owner"))[:80]
+        key = secrets.token_hex(32)
+        res = check(db.call("shop_login_create", shop_code, "link", sha256_hex(key), label))
+        return {"login_id": res["login_id"], "key": key}
+
     @app.get("/health", tags=["platform"], operation_id="health")
     def health():
         return {"status": "live", "contract_version": s.CONTRACT_VERSION}
