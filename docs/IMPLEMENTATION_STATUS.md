@@ -1,7 +1,7 @@
 # Implementation Status
 
 **Last updated:** 5 October 2026
-**Current phase:** 2 (contracts) substantially done; 1 (print spike) done on a virtual printer only; 3 not started.
+**Current phase:** 5 (Windows desktop app) built and launching; the customer site and shop API are live on Vercel and Supabase. Nothing has printed on a physical printer.
 
 ## Phase gates
 
@@ -10,9 +10,10 @@
 | 0 Approvals and repository | all decisions recorded, pushed, founder confirms | Mostly done. O-items answered, D-5/D-12/D-15/D-18 approved; the other D-items are still PROPOSED. Founder written confirmation not given as a single statement |
 | 1 Print spike | physical printer, 30 normal prints, completion rule, engine chosen | **NOT PASSED.** Virtual printer only (founder-allowed). 30/30 normal prints, completion rule v1 written, engine provisional. Physical-printer run, duplex/colour and real failure drills outstanding. See `docs/PRINT_SPIKE_REPORT.md` |
 | 2 Contracts | see checklist below | Done except the C# client |
-| 3 Backend slice | customer API built and tested locally (45 integration tests) against a real PostgreSQL; Supabase storage backend verified live; **database not yet created on Supabase and nothing deployed** | In progress |
+| 3 Backend slice | Customer and shop APIs built, tested on a real PostgreSQL, deployed to Vercel (Mumbai) with Supabase; migrations 0001-0007 applied live | Done on free tier; cold-start latency not measured |
 | 4 Customer web | Built. 24 unit tests (estimator matches Python on 21 shared vectors) and 6 end-to-end browser tests pass against the real API, real PostgreSQL and real file storage on this PC | **Gate NOT passed**: not tested on a real Android or iPhone, not tested against the deployed API, 60-second timing not measured. Emulation only (Edge, Pixel 7 profile) |
-| 5-10 | not started | |
+| 5 Windows desktop app | Core (journal, agent loop, pairing, real engine, spooler observer) with 58 tests; WPF app launches and shows a pairing code | **In progress.** Not yet done: job preview, start at sign-in, installer, end-to-end run against the live site and a printer |
+| 6-10 | not started | |
 
 ## Phase 2 checklist
 
@@ -77,22 +78,44 @@ Supabase's CDN caches authenticated object reads. After `delete`, an authenticat
 
 Supabase credentials were rotated by the founder. Old key rejected (HTTP 400). New values live in the git-ignored `.env` and the V4 Vercel project. Vercel only applies environment changes to NEW deployments, so a redeploy is required after every change (I forgot once; the live site reported `database: failed` until redeployed). After redeploy: `/health/ready` OK, and a full live customer flow (create, upload, finalize, quote, submit, status, cancel) succeeded.
 
+## Windows desktop app and print engine (5 Oct 2026)
+
+- `apps/desktop`: `AutoPrint.Core` (journal, agent loop with backoff, pairing client, Sumatra engine, native spooler observer) and `AutoPrint.Desktop` (WPF: pairing screen with code, queue cards with approve/reject, needs-attention actions, printer picker with test page, tray icon, single instance, closing the window keeps printing). 58 tests pass, including 5 that use the real spooler and the real engine on the virtual printer (they skip unless `AP_REAL_PRINTER` and `AP_SUMATRA` are set).
+- **Completion rule v2** (migration 0006). Windows reported 0 pages printed for a job that did print, so "pages printed >= 1" is no longer required (the count is stored for information). Other safeguards unchanged. Still provisional: needs a physical printer.
+- **Native spooler API** instead of `System.Printing`, which is bound to its creating thread and crashed in async code.
+- **Sumatra hash check** before every print (V3 shipped the installer under that name). The expected hash is from the portable 3.6.1 download and was not checked against a publisher checksum. `tools/SumatraPDF.exe` is git-ignored and must be placed there for builds.
+- App data lives in `%LOCALAPPDATA%\AutoPrintV4`, separate from V3's `AutoPrint` folder. A first launch wrote one log line into V3's folder before I moved it; that line was deleted.
+- Antivirus and SmartScreen: see `docs/DESKTOP_DISTRIBUTION.md`. Not yet tested against Defender.
+
+## Connecting a shop computer (5 Oct 2026)
+
+- **Device pairing** (migration 0005): the PC makes its own secret, shows a code like `ABCD-EFGH` (15 minutes, single use), the code is approved, the app connects. Servers store only hashes; no secret travels back.
+- **Shop dashboard** (migration 0007, page `/shop`): the founder runs `ap_admin.py issue-shop-link --shop CODE` and hands over a private link (`/shop#key=...`). The shopkeeper types the app's code on that page to connect a computer, sees their computers and can disconnect one. The `shop_logins` table has a `method` column (`link` now; `phone` and `email` reserved) so other sign-in methods can be added later without changing the dashboard. Only hashes are stored; each login can be revoked.
+- Bug caught by tests: disconnecting must set the device `status`, not only `revoked_at`; fixed before release.
+- Founder-run approval (`ap_admin.py approve-pairing`) still works as a fallback.
+- Live check done: wrong key gives 401, `/shop` loads. Not done: issuing a real link and connecting the real app through the dashboard.
+
+## Customer connection (discussed, not built)
+
+Today a customer reaches a shop by scanning the counter QR or opening `/s/<SHOP CODE>`; no account. Decided on 5 Oct 2026, to build later: a home-page box where the customer types the short shop code (keep `ABC123`), typo correction by position (letter where digit belongs), case and dash insensitive, show shop name before upload, remember the last shop, optional add-to-home-screen, a printable counter poster. Open risk: no verified per-address rate limit on customer requests.
+
 ## Findings so far
 
 - V3's bundled `SumatraPDF.exe` is the installer, not the portable program (identical hash). V3 could never have reliably printed through it.
 - "Job left the spooler queue" is not evidence of printing: a cancelled job also leaves. Fixed in the rule.
 - A killed print process can leave an orphan job stuck in the spooler.
 - A nonexistent printer name makes Sumatra hang rather than fail.
-- A bug the tests caught: the completion rule failed open when evidence lacked `max_pages_printed`. Fixed.
+- A bug the tests caught: the completion rule failed open when evidence lacked `max_pages_printed`. Fixed (rule v1); v2 now ignores the field.
 
 ## Not verified
 
-Physical printing in any form. Duplex and colour. Anything on Supabase or a deployed host: no V4 cloud resource exists yet (Phase 3 needs founder-created accounts).
+Physical printing in any form. Duplex and colour. Real-phone behaviour. Cold-start latency. Defender and SmartScreen behaviour of the app. The whole chain (customer upload to Windows app to printer) in one run. 7 npm advisories were not checked (audit endpoint unavailable). Vercel Hobby terms for commercial use. The scheduled maintenance job (GitHub Actions) is not set up.
 
 ## Blocked on founder
 
 - Physical printer access for the real Phase 1 drills (the Kyocera on this PC is offline).
-- Creating the V4 Supabase project and an API host account (Phase 3). The agent must not use any V3 resource.
+- Issue a shop link and run the real app through the dashboard (needs the founder at the PC).
+- Decision on the code-signing route (see `docs/DESKTOP_DISTRIBUTION.md`).
 - Review of `docs/CONTRACTS.md` and `docs/ARCHITECTURE.md`.
 
 ## Machine changes made on this PC (clean up when finished)
@@ -100,3 +123,4 @@ Physical printing in any form. Duplex and colour. Anything on Supabase or a depl
 - A local printer named **AutoPrint-Spike-PDF** and a printer port at `F:\Projects\AutoPrint-V4\spikes\_out\spike_out.pdf`. One orphan spooler job is stuck on it. Remove with `Remove-Printer` and `Remove-PrinterPort`.
 - A throwaway PostgreSQL 17 data directory at `.localdb/` (ignored by git), started on port 55432.
 - .NET 8 SDK installed with winget.
+- A built copy of the app in `apps/desktop/src/AutoPrint.Desktop/bin` (git-ignored). The test launch was stopped and its `AutoPrintV4` data folder deleted.
