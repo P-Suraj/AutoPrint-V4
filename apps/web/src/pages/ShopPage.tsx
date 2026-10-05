@@ -5,6 +5,7 @@ import { ApiError, api, uploadPdf, type Schemas } from "../api";
 import { estimate, rupees, type Options } from "../estimate";
 import { PdfPreview, readPageCount } from "../preview";
 import { saveSecret } from "../store";
+import { rememberShop } from "../shopCode";
 
 const MAX_BYTES = 26_214_400;
 
@@ -30,7 +31,7 @@ export default function ShopPage() {
   useEffect(() => {
     let alive = true;
     Promise.all([api.getShop(shopCode), api.getRates(shopCode).catch(() => null)])
-      .then(([s, r]) => { if (alive) { setShop(s); setRates(r); } })
+      .then(([s, r]) => { if (alive) { setShop(s); setRates(r); rememberShop({ code: s.code, name: s.name }); } })
       .catch((e) => alive && setLoadError(message(e)));
     return () => { alive = false; };
   }, [shopCode]);
@@ -84,7 +85,7 @@ export default function ShopPage() {
     } catch (e) { setError(message(e)); setBusy(null); }
   }
 
-  if (loadError) return <main><h1>AutoPrint</h1><p role="alert" className="error">{loadError}</p></main>;
+  if (loadError) return <main><h1>AutoPrint</h1><p role="alert" className="error">{loadError}</p><a href="/">Try another shop code</a></main>;
   if (!shop) return <main><h1>AutoPrint</h1><p>Loading…</p></main>;
   if (!shop.accepting_orders) return <main><h1>{shop.name}</h1><p role="alert" className="error">This shop is not taking orders right now.</p></main>;
 
