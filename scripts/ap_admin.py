@@ -86,6 +86,18 @@ def revoke_device(conn, device_id: str) -> None:
             raise SystemExit("no active device with that id")
 
 
+def show_pairing(conn, code: str) -> dict:
+    with conn, conn.cursor() as cur:
+        cur.execute("SELECT ap.pair_lookup(%s)", (code,))
+        return cur.fetchone()[0]
+
+
+def approve_pairing(conn, code: str, shop_code: str) -> dict:
+    with conn, conn.cursor() as cur:
+        cur.execute("SELECT ap.pair_approve(%s, %s)", (code, shop_code))
+        return cur.fetchone()[0]
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -94,6 +106,8 @@ def main(argv=None) -> int:
     a = sub.add_parser("issue-code"); a.add_argument("--shop", required=True); a.add_argument("--minutes", type=int, default=30)
     a = sub.add_parser("jobs"); a.add_argument("--shop", required=True); a.add_argument("--hours", type=int, default=24)
     a = sub.add_parser("revoke-device"); a.add_argument("--device", required=True)
+    a = sub.add_parser("show-pairing"); a.add_argument("--code", required=True)
+    a = sub.add_parser("approve-pairing"); a.add_argument("--code", required=True); a.add_argument("--shop", required=True)
     args = p.parse_args(argv)
     conn = connect()
     try:
@@ -113,6 +127,17 @@ def main(argv=None) -> int:
                 print(*row, sep="  ")
         elif args.cmd == "revoke-device":
             revoke_device(conn, args.device); print("revoked")
+        elif args.cmd == "show-pairing":
+            r = show_pairing(conn, args.code)
+            if r["result"] != "ok":
+                raise SystemExit(f"no such pairing code ({r['result']})")
+            print(f"PC name: {r['display_name']}   created: {r['created_at']}   expired: {r['expired']}   already approved: {r['approved']}")
+            print("Confirm this PC name with the shopkeeper before approving.")
+        elif args.cmd == "approve-pairing":
+            r = approve_pairing(conn, args.code, args.shop)
+            if r["result"] != "ok":
+                raise SystemExit(f"not approved ({r['result']})")
+            print(f"Approved '{r['display_name']}' for shop {r['shop_code']}. The app will connect within a few seconds.")
     finally:
         conn.close()
     return 0

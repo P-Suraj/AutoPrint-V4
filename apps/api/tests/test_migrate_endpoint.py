@@ -11,14 +11,17 @@ from dbtools import MIGRATIONS, build_database, drop_database
 
 
 def test_migrate_applies_pending_files_once_and_is_idempotent(tmp_path):
-    # a database that has only 0001-0003 applied, as the real one did before 0004
+    # a database that has everything except the newest migration (0005), as the live one did before it was applied
+    newest = MIGRATIONS[-1].stem
+    assert newest == "0005_device_pairing", "update this test when a newer migration is added"
     name = "v4_mig_" + uuid.uuid4().hex[:8]
     url = build_database(name)
     c = psycopg2.connect(url); c.autocommit = True
     cur = c.cursor()
-    cur.execute("DROP FUNCTION ap.agent_poll(uuid, text, text); DROP FUNCTION ap.order_view(text); DROP FUNCTION ap.job_document(uuid, uuid); DROP TABLE ap.system_state")
+    cur.execute("DROP FUNCTION ap.pair_start(text, text, text); DROP FUNCTION ap.pair_lookup(text); DROP FUNCTION ap.pair_approve(text, text); "
+                "DROP FUNCTION ap.pair_poll(text); DROP TABLE ap.pairings")
     cur.execute("CREATE TABLE ap.schema_migrations (id text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())")
-    for f in MIGRATIONS[:3]:
+    for f in MIGRATIONS[:-1]:
         cur.execute("INSERT INTO ap.schema_migrations (id) VALUES (%s)", (f.stem,))
     s = Settings(database_url=url, local_storage_dir=str(tmp_path / "f"), signing_key="k" * 40, maintenance_token="m" * 40,
                  background_maintenance=False).validate()
@@ -28,11 +31,11 @@ def test_migrate_applies_pending_files_once_and_is_idempotent(tmp_path):
             assert client.post("/v1/internal/migrate", headers={"X-Maintenance-Token": "nope"}).status_code == 401
             ok = client.post("/v1/internal/migrate", headers={"X-Maintenance-Token": "m" * 40})
             assert ok.status_code == 200, ok.text
-            assert ok.json()["applied_now"] == ["0004_agent_and_views"]
+            assert ok.json()["applied_now"] == [newest]
             again = client.post("/v1/internal/migrate", headers={"X-Maintenance-Token": "m" * 40}).json()
-            assert again["applied_now"] == [] and again["applied_total"][-1] == "0004_agent_and_views"
-        cur.execute("SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname='ap' AND proname IN ('agent_poll','order_view','job_document')")
-        assert cur.fetchone()[0] == 3
+            assert again["applied_now"] == [] and again["applied_total"][-1] == newest
+        cur.execute("SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname='ap' AND proname LIKE 'pair_%'")
+        assert cur.fetchone()[0] == 4
     finally:
         c.close()
         drop_database(name)

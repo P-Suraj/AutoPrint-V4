@@ -304,6 +304,17 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
                             body.display_name, sha256_hex(secret)))
         return s.EnrollResponse(device_id=res["device_id"], device_secret=secret, shop_code=res["shop_code"], shop_name=res["shop_name"])
 
+    @agent.post("/pair/start", response_model=s.PairStartResponse, status_code=201, operation_id="startPairing")
+    def pair_start(body: s.PairStartRequest):
+        res = check(db.call("pair_start", sha256_hex(body.poll_token), sha256_hex(body.device_secret), body.display_name))
+        code = res["code"]
+        return s.PairStartResponse(pair_code=f"{code[:4]}-{code[4:]}", expires_at=res["expires_at"])
+
+    @agent.post("/pair/poll", response_model=s.PairPollResponse, operation_id="pollPairing")
+    def pair_poll(body: s.PairPollRequest):
+        res = check(db.call("pair_poll", sha256_hex(body.poll_token)))
+        return s.PairPollResponse(status=res["status"], device_id=res.get("device_id"), shop_code=res.get("shop_code"), shop_name=res.get("shop_name"))
+
     @agent.get("/jobs", response_model=s.JobListResponse, operation_id="listJobs")
     def list_jobs(x_device_id: UUID = Header(...), x_device_secret: str = Header(...), x_agent_version: str = Header("")):
         """The poll. Authenticates, records the heartbeat, sweeps when due, returns the queue: one round trip."""

@@ -94,7 +94,8 @@ def test_order_secret_and_device_headers_are_required_where_documented():
             names = {p["name"].lower() for p in op.get("parameters", []) if p["in"] == "header"}
             if path.startswith("/v1/orders/"):
                 assert "x-order-secret" in names, f"{method} {path}"
-            if path.startswith("/v1/agent/") and path != "/v1/agent/enroll":
+            before_a_device_exists = {"/v1/agent/enroll", "/v1/agent/pair/start", "/v1/agent/pair/poll"}
+            if path.startswith("/v1/agent/") and path not in before_a_device_exists:
                 assert {"x-device-id", "x-device-secret"} <= names, f"{method} {path}"
 
 
