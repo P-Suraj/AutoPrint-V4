@@ -95,6 +95,16 @@ Supabase credentials were rotated by the founder. Old key rejected (HTTP 400). N
 - Founder-run approval (`ap_admin.py approve-pairing`) still works as a fallback.
 - Live check done: wrong key gives 401, `/shop` loads. Not done: issuing a real link and connecting the real app through the dashboard.
 
+## Whole-chain run on the live site (5 Oct 2026)
+
+`e2e/run_live_e2e.py` plays the customer against https://autoprint-v4.vercel.app (new order, upload, quote, submit) while the C# test `LiveE2ETests` plays the shop with the real agent, real SumatraPDF and the real Windows spooler on the virtual printer. It pairs through the shopkeeper dashboard API, approves the job, and disconnects its device afterwards. Last result: **PASS**. Customer saw "awaiting approval", then "printing" 2.4 s after submit, then "completed" 5.9 s after submit; the virtual printer produced a 2-page file for the 2-page upload. Approve click to done was about 4 s (about 1 s of that waiting for the next poll).
+
+What this proves: the whole software chain on real infrastructure. What it does not prove: physical printing, a real phone, the WPF screens (the run uses the same core code, not the window), or behaviour when the shop network drops.
+
+Found by this run, fixed: `ShopApi` set `BaseAddress` on an HttpClient already used for pairing, which throws, so the real app would have crashed right after pairing. It now builds absolute URLs. Also added `POST /v1/internal/shop-login` (maintenance token) because the Supabase database ports are not reachable from the founder's PC; it creates or revokes shop logins through the deployed API.
+
+Each run leaves one completed order on the test shop TST001 (retained until the normal cleanup).
+
 ## Customer connection (discussed, not built)
 
 Today a customer reaches a shop by scanning the counter QR or opening `/s/<SHOP CODE>`; no account. Decided on 5 Oct 2026, to build later: a home-page box where the customer types the short shop code (keep `ABC123`), typo correction by position (letter where digit belongs), case and dash insensitive, show shop name before upload, remember the last shop, optional add-to-home-screen, a printable counter poster. Open risk: no verified per-address rate limit on customer requests.

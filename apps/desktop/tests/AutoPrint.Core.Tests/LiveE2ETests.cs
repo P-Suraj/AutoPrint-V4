@@ -60,13 +60,13 @@ public class LiveE2ETests
             using var journal = new Journal(Path.Combine(dir, "journal.db"));
             var runs = new List<string>();
             var orchestrator = new PrintOrchestrator(api, new SumatraEngine(sumatra), new WinSpoolObserver(), journal, new HttpDownloader(http),
-                new OrchestratorOptions(Path.Combine(dir, "work"), _ => printer), m => { if (m.StartsWith("run:")) lock (runs) runs.Add(m); });
-            var agent = new AgentService(api, orchestrator, TimeSpan.FromSeconds(2));
+                new OrchestratorOptions(Path.Combine(dir, "work"), _ => printer));
+            var agent = new AgentService(api, orchestrator, TimeSpan.FromSeconds(2), log: m => { if (m.StartsWith("run:")) lock (runs) runs.Add(m); });
             var approved = new HashSet<Guid>();
             agent.StateChanged += s =>
             {
                 if (s.Queue is null) return;
-                foreach (var j in s.Queue.Jobs.Where(j => j.Status == JobStatus.AwaitingApproval && j.DocumentName.StartsWith("e2e_") && approved.Add(j.JobId)))
+                foreach (var j in s.Queue.Jobs.Where(j => j.Status == JobStatus.AwaitingApproval && j.DocumentName.StartsWith("e2e_") && j.CreatedAt >= t0 - TimeSpan.FromSeconds(5) && approved.Add(j.JobId)))
                 {
                     Mark("job visible to the shop");
                     _ = Task.Run(async () => { await api.ApproveAsync(j.JobId, cts.Token); Mark("approved (the click)"); agent.Wake(); });

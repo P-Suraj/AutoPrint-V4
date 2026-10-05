@@ -55,7 +55,8 @@ def main():
     try:
         t0 = time.time()
         while time.time() - t0 < 150:
-            devs = c.get("/v1/shop/devices", headers={"X-Shop-Key": key}).json()["devices"]
+            r = c.get("/v1/shop/devices", headers={"X-Shop-Key": key})
+            devs = r.json().get("devices", []) if r.status_code == 200 else []
             if any(d["name"] == "E2E-TEST-PC" and not d["revoked"] for d in devs):
                 break
             time.sleep(1)

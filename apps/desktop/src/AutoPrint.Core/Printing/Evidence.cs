@@ -54,7 +54,7 @@ public static class OutcomeRules
             return new(Outcome.Failed, "engine_failed_nothing_in_spooler");     // nothing reached the printer queue
         if (!submit.Accepted)
             return new(Outcome.Uncertain, "engine_failed_but_job_in_spooler");  // an orphan may be stuck in the queue
-        if (ev.SatisfiesRule) return new(Outcome.Completed, "rule_v1_satisfied");
+        if (ev.SatisfiesRule) return new(Outcome.Completed, "rule_v2_satisfied");
         if (!ev.SpoolerJobSeen) return new(Outcome.Uncertain, "job_never_seen_in_spooler");
         if (ev.WasCancelledAtPrinter && ev.MaxPagesPrinted == 0) return new(Outcome.Failed, "cancelled_at_printer_before_any_page");
         if (ev.HasBadFlag) return new(Outcome.Uncertain, "spooler_error_flag");

@@ -34,13 +34,14 @@ public sealed class ShopApi : IShopApi
     private readonly HttpClient _http;
     private readonly DeviceCredentials _cred;
     private readonly string _version;
+    private readonly string _base;
 
     public ShopApi(HttpClient http, DeviceCredentials credentials, string agentVersion)
     {
         _http = http;
         _cred = credentials;
         _version = agentVersion;
-        _http.BaseAddress ??= new Uri(credentials.ApiBaseUrl.TrimEnd('/') + "/");
+        _base = credentials.ApiBaseUrl.TrimEnd('/');   // absolute URLs: the HttpClient is shared with pairing and downloads, so its BaseAddress must stay untouched
     }
 
     /// <summary>Enrollment happens before credentials exist, so it is static.</summary>
@@ -53,7 +54,7 @@ public sealed class ShopApi : IShopApi
 
     private HttpRequestMessage Req(HttpMethod m, string path, object? body = null)
     {
-        var r = new HttpRequestMessage(m, "v1/agent" + path);
+        var r = new HttpRequestMessage(m, _base + "/v1/agent" + path);
         r.Headers.Add("X-Device-Id", _cred.DeviceId.ToString());
         r.Headers.Add("X-Device-Secret", _cred.DeviceSecret);
         r.Headers.Add("X-AutoPrint-Contract-Version", "1");
