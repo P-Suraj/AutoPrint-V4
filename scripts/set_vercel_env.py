@@ -41,6 +41,27 @@ def main() -> int:
         raise SystemExit("this folder is not linked to the V4 Vercel project; refusing to write environment variables")
 
     env = dotenv()
+
+    # The founder puts the RAW database password in .env as AUTOPRINT_V4_DB_PASSWORD. This script builds the
+    # connection URL itself, percent-encoding the password, so special characters such as @ cannot break it.
+    password = env.get("AUTOPRINT_V4_DB_PASSWORD")
+    if password and not args.database_url:
+        from urllib.parse import quote, urlparse
+        ref = urlparse(env["AUTOPRINT_V4_SUPABASE_URL"]).hostname.split(".")[0]
+        args.database_url = f"postgresql://postgres.{ref}:{quote(password, safe='')}@aws-0-ap-south-1.pooler.supabase.com:6543/postgres"
+        text = (ROOT / ".env").read_text(encoding="utf-8")
+        lines = [l for l in text.splitlines() if not l.startswith("AUTOPRINT_V4_DATABASE_URL=")]
+        lines.append(f"AUTOPRINT_V4_DATABASE_URL={args.database_url}")
+        (ROOT / ".env").write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+        env = dotenv()
+
+    # Refuse to push a key Supabase rejects (for example one that is still the old, rotated value).
+    import httpx
+    probe = httpx.get(env["AUTOPRINT_V4_SUPABASE_URL"] + "/storage/v1/bucket",
+                      headers={"apikey": env["AUTOPRINT_V4_SUPABASE_SECRET_KEY"], "Authorization": "Bearer " + env["AUTOPRINT_V4_SUPABASE_SECRET_KEY"]}, timeout=20)
+    if probe.status_code != 200:
+        raise SystemExit(f"Supabase rejects the secret key in .env (HTTP {probe.status_code}); nothing was pushed to Vercel")
+
     values = {
         "AUTOPRINT_V4_DATABASE_URL": args.database_url or env["AUTOPRINT_V4_DATABASE_URL"],
         "AUTOPRINT_V4_SUPABASE_URL": env["AUTOPRINT_V4_SUPABASE_URL"],
