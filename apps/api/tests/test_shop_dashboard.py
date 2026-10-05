@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import psycopg2
+import pdfs  # noqa: F401  (sample PDFs)
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 import ap_admin  # noqa: E402
@@ -113,3 +114,45 @@ def _founder_endpoint_checks(client, shop):
     assert client.post("/v1/internal/shop-login", headers=token, json={"shop_code": "NOP000"}).status_code == 404
     assert client.post("/v1/internal/shop-login", headers=token, json={"revoke_label": "e2e"}).json() == {"revoked": 1}
     assert client.get("/v1/shop/me", headers=H(key)).status_code == 401
+
+
+def test_founder_report_shows_counts_devices_and_no_document_names(settings, shop, flow, client, api_db_url):
+    import dataclasses
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+    import pdfs
+    flow.full(pdfs.blank(2))
+    key = key_for(api_db_url, shop.code)
+    poll, secret, start = new_pairing(client, "COUNTER-PC")
+    client.post("/v1/shop/pair/approve", headers=H(key), json={"pair_code": start["pair_code"]})
+    with TestClient(create_app(dataclasses.replace(settings, maintenance_token="m" * 40))) as c:
+        assert c.get(f"/v1/internal/report/{shop.code}").status_code == 401
+        r = c.get(f"/v1/internal/report/{shop.code}", headers={"X-Maintenance-Token": "m" * 40})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["counts"] == {"awaiting_approval": 1} and body["shop"]["code"] == shop.code
+        assert len(body["jobs"]) == 1 and body["jobs"][0]["status"] == "awaiting_approval"
+        assert body["devices"][0]["name"] == "COUNTER-PC" and body["devices"][0]["status"] == "active"
+        assert "doc.pdf" not in r.text and "file_name" not in r.text
+        assert c.get("/v1/internal/report/NOP000", headers={"X-Maintenance-Token": "m" * 40}).status_code == 404
+
+
+def test_founder_can_create_a_shop_and_publish_rates_without_the_database_port(settings):
+    import dataclasses
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+    tok = {"X-Maintenance-Token": "m" * 40}
+    code = "ZQ" + secrets.choice("ABCDEFGHJK") + str(secrets.randbelow(900) + 100)
+    rules = {"bw": {"simplex": [{"from_sides": 1, "to_sides": None, "paise_per_side": 200}], "duplex": [{"from_sides": 1, "to_sides": None, "paise_per_side": 120}]},
+             "color": {"simplex": [{"from_sides": 1, "to_sides": None, "paise_per_side": 1000}], "duplex": [{"from_sides": 1, "to_sides": None, "paise_per_side": 800}]}}
+    with TestClient(create_app(dataclasses.replace(settings, maintenance_token="m" * 40))) as c:
+        assert c.post("/v1/internal/shop", json={"code": code, "name": "X"}).status_code == 401
+        assert c.post("/v1/internal/shop", headers=tok, json={"code": "bad", "name": "X"}).status_code == 404
+        assert c.post("/v1/internal/shop", headers=tok, json={"code": code, "name": "Nameless", "rules": {"bw": {}}}).status_code == 409
+        assert c.get(f"/v1/shops/{code}").status_code == 404                         # the bad rate card created nothing
+        r = c.post("/v1/internal/shop", headers=tok, json={"code": code, "name": "New Print Shop", "rules": rules})
+        assert r.status_code == 200 and r.json() == {"code": code, "created": True, "rate_card_version": 1}
+        assert c.get(f"/v1/shops/{code}").json()["name"] == "New Print Shop"
+        assert c.get(f"/v1/shops/{code}/rates").status_code == 200
+        again = c.post("/v1/internal/shop", headers=tok, json={"code": code, "rules": rules}).json()
+        assert again == {"code": code, "created": False, "rate_card_version": 2}

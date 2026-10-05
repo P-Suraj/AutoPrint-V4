@@ -50,6 +50,21 @@ class Database:
             cur.execute(f"SELECT ap.{fn}({marks})", params)
             return cur.fetchone()[0]
 
+    def transaction(self, fn):
+        """Run fn(cursor) as one all-or-nothing transaction (the pool is otherwise autocommit)."""
+        with self._conn() as conn:
+            conn.autocommit = False
+            try:
+                with conn.cursor() as cur:
+                    result = fn(cur)
+                conn.commit()
+                return result
+            except BaseException:
+                conn.rollback()
+                raise
+            finally:
+                conn.autocommit = True
+
     def one(self, sql: str, params: tuple = ()) -> Any:
         with self._conn() as conn, conn.cursor() as cur:
             cur.execute(sql, params)

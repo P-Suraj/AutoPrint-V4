@@ -457,6 +457,70 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
         from app.migrate import apply_pending
         return apply_pending(settings.database_url)
 
+    @app.post("/v1/internal/shop", include_in_schema=False)
+    def provision_shop(body: dict, x_maintenance_token: str = Header("")):
+        """Founder tool: creates a shop (if the code is new) and/or publishes a new rate card version, in one transaction.
+        Needed because the database port is not reachable from the founder PC."""
+        import json as _json
+        import re as _re
+        require_maintenance_token(x_maintenance_token)
+        code, name, rules = str(body.get("code", "")).strip().upper(), str(body.get("name", "")).strip(), body.get("rules")
+        if not _re.fullmatch(r"[A-Z]{3}[0-9]{3}", code):
+            raise ApiException("shop_not_found")
+        if rules is not None:
+            try:
+                validate_rules(rules)
+            except PricingError as e:
+                raise ApiException(e.code) from None
+
+        def work(cur):
+            cur.execute("SELECT id FROM ap.shops WHERE code = %s FOR UPDATE", (code,))
+            row = cur.fetchone()
+            created = row is None
+            if created:
+                if not (1 <= len(name) <= 80):
+                    raise ApiException("invalid_items")
+                cur.execute("INSERT INTO ap.shops (code, name) VALUES (%s, %s) RETURNING id", (code, name))
+                row = cur.fetchone()
+            version = None
+            if rules is not None:
+                cur.execute("SELECT COALESCE(max(version), 0) + 1 FROM ap.rate_cards WHERE shop_id = %s", (row[0],))
+                version = cur.fetchone()[0]
+                cur.execute("UPDATE ap.rate_cards SET retired_at = now() WHERE shop_id = %s AND retired_at IS NULL", (row[0],))
+                cur.execute("INSERT INTO ap.rate_cards (shop_id, version, rules) VALUES (%s, %s, %s::jsonb)", (row[0], version, _json.dumps(rules)))
+            return {"code": code, "created": created, "rate_card_version": version}
+
+        return db.transaction(work)
+
+    @app.get("/v1/internal/report/{shop_code}", include_in_schema=False)
+    def shop_report(shop_code: str, hours: int = 24, x_maintenance_token: str = Header("")):
+        """Founder visibility for one shop: job counts and outcomes, how long each took, and whether the shop computer is
+        connected. No document names, no customer data. Same token as migrate."""
+        require_maintenance_token(x_maintenance_token)
+        hours = max(1, min(hours, 24 * 14))
+        shop_row = db.one("SELECT id, name FROM ap.shops WHERE code = %s", (shop_code.strip().upper(),))
+        if shop_row is None:
+            raise ApiException("shop_not_found")
+        shop_id = shop_row[0]
+        jobs = db.rows(
+            "SELECT o.short_code, j.status::text, j.attempt_count, j.created_at, "
+            "EXTRACT(EPOCH FROM (j.updated_at - j.created_at))::int AS seconds_open "
+            "FROM ap.jobs j JOIN ap.orders o ON o.id = j.order_id "
+            "WHERE j.shop_id = %s AND j.created_at > now() - make_interval(hours => %s) ORDER BY j.created_at DESC LIMIT 200",
+            (shop_id, hours))
+        devices = db.rows(
+            "SELECT display_name, status::text, last_seen_at, agent_version, created_at FROM ap.devices WHERE shop_id = %s ORDER BY created_at DESC LIMIT 20",
+            (shop_id,))
+        counts: dict[str, int] = {}
+        for r in jobs:
+            counts[r[1]] = counts.get(r[1], 0) + 1
+        return {
+            "shop": {"code": shop_code.upper(), "name": shop_row[1]}, "window_hours": hours,
+            "counts": counts, "attention": counts.get("needs_attention", 0) + counts.get("failed", 0),
+            "jobs": [{"order": r[0], "status": r[1], "attempts": r[2], "created_at": r[3], "seconds_to_final_state": r[4]} for r in jobs],
+            "devices": [{"name": d[0], "status": d[1], "last_seen_at": d[2], "agent_version": d[3], "paired_at": d[4]} for d in devices],
+        }
+
     @app.post("/v1/internal/shop-login", include_in_schema=False)
     def issue_shop_login(body: dict, x_maintenance_token: str = Header("")):
         """Founder tool: creates (method "link") or revokes a shop login without needing the database port. The key is

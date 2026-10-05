@@ -1,0 +1,23 @@
+# Runs the cleanup job on the deployed API: expires old orders and deletes documents whose retention window has passed.
+# Needed because the serverless host has no background thread (the shop app also triggers it, but only while a shop is online).
+# One-time setup: GitHub repo > Settings > Secrets and variables > Actions > New repository secret
+#   name: AUTOPRINT_MAINTENANCE_TOKEN   value: the AUTOPRINT_V4_MAINTENANCE_TOKEN from the local .env
+name: maintenance
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+permissions: {}
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Call the maintenance endpoint
+        env:
+          TOKEN: ${{ secrets.AUTOPRINT_MAINTENANCE_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then echo "AUTOPRINT_MAINTENANCE_TOKEN secret is not set"; exit 1; fi
+          code=$(curl -sS -o out.json -w "%{http_code}" -X POST -H "X-Maintenance-Token: $TOKEN" --max-time 60 https://autoprint-v4.vercel.app/v1/internal/maintenance)
+          echo "HTTP $code"; cat out.json; echo
+          test "$code" = "200"
