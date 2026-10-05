@@ -12,6 +12,7 @@ The database port is blocked from the founder PC, so these tools go through the 
 1. Copy `dist\AutoPrintSetup-<version>.exe` to the shop PC. Verify its SHA-256 matches `AutoPrintSetup-<version>.exe.sha256.txt`.
 2. Run it. If Windows shows "Windows protected your PC", click **More info**, then **Run anyway** (the file is not signed yet). Keep "Start AutoPrint when I sign in" ticked.
 3. The app shows a code. The shopkeeper opens their private link and types it. Within seconds the app shows the queue.
+4. Set the shop PC to **never sleep while plugged in** (Settings, System, Power) and keep it plugged in; a sleeping PC stops receiving jobs and the shop shows as offline.
 4. In the app choose the printer, press **Print a test page**, and confirm paper came out.
 5. Send one real job from a phone and approve it. Done.
 

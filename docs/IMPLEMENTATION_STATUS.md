@@ -1,5 +1,7 @@
 # Implementation Status
 
+> Resuming? Start with `docs/HANDOVER.md` (current state, what is unverified, next steps, how to work on it).
+
 **Last updated:** 5 October 2026
 **Current phase:** 5 (Windows desktop app) built and launching; the customer site and shop API are live on Vercel and Supabase. Nothing has printed on a physical printer.
 
