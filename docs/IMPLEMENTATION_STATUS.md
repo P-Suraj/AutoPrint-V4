@@ -58,6 +58,13 @@
 - An earlier incident: until the first `vercel.json`, the production alias served the raw repository files publicly (docs, SQL). No secret was in the repository, and it was fixed the same day by serving only `apps/web/dist` plus the API. The alias now returns the app page for those paths.
 - Not verified: latency numbers, the 60-second customer timing on a real phone, the scheduled maintenance call (no GitHub Actions workflow yet; retention and expiry sweeps do not run on the deployed site until one exists), the Vercel Hobby terms for a paid shop, and the 7 npm advisories printed by the build (audit is unreachable from this network).
 
+## Shop-side API and speed (5 Oct 2026)
+
+- Shop-side routes implemented and tested against a real database: enroll, poll (also the heartbeat), approve, reject, resolve, claim, renew, sent, outcome, job document. The shop poll and the customer status call each cost one database round trip (migration 0004).
+- Migration 0004 applied to the live V4 database through the token-protected `/v1/internal/migrate` endpoint (repo files only, one transaction per file, rolled back on failure). `ap.schema_migrations` lists 0001 to 0004.
+- Live timings from the founder's network, warm: /health 70 ms, shop lookup 115 ms, shop poll 94 ms, static page 50 ms. Cold starts and a full successful poll under load are NOT measured.
+- Still no desktop app: nothing prints. The demo SQL files stand in for the shopkeeper.
+
 ## Findings so far
 
 - V3's bundled `SumatraPDF.exe` is the installer, not the portable program (identical hash). V3 could never have reliably printed through it.
