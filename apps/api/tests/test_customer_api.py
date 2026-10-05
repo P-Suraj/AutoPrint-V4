@@ -355,3 +355,4 @@ def test_logs_never_contain_secrets_signed_urls_or_file_names(flow, caplog):
     for forbidden in (flow.secret, sig, "my-passport-scan", reg["upload_url"]):
         assert forbidden not in text, f"log leaked {forbidden[:12]}..."
     assert "POST /v1/orders/{order_id}/documents" in text          # the route template is logged, not the URL
+
