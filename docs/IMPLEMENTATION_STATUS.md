@@ -113,6 +113,14 @@ Each run leaves one completed order on the test shop TST001 (retained until the 
 - Founder test guide: `docs/TEST_THE_WINDOWS_APP.md`.
 - Machine change: Inno Setup 6 was already installed on this PC.
 
+## Phase 7 pieces built (5 Oct 2026)
+
+- `docs/RUNBOOK.md`: provision a shop, install, daily check, failure table, retention, secrets. Items it marks not verified are not verified.
+- Founder tools through the deployed API (the database port is unreachable from the founder PC): `scripts/ap_remote.py` (create shop with prices in one transaction, publish new prices, issue and revoke shop links) and `scripts/ap_report.py` (per-shop counts, outcomes, computers online; no document names). Live check: the report for TST001 listed 8 jobs and the founder installed app as ONLINE. These endpoints use the maintenance token, which can now also read reports and mint shop logins, so it is a high-value secret.
+- `.github/workflows/maintenance.yml` (every 15 minutes). **Does nothing until the founder adds the repository secret `AUTOPRINT_MAINTENANCE_TOKEN`.**
+- Still open in Phase 7: clean-PC install timed against the runbook, retention proven live past a real window, reboot test, 24-hour soak, purge-on-request script, counter poster generator.
+- 211 Python tests pass.
+
 ## Customer connection (discussed, not built)
 
 Today a customer reaches a shop by scanning the counter QR or opening `/s/<SHOP CODE>`; no account. Decided on 5 Oct 2026, to build later: a home-page box where the customer types the short shop code (keep `ABC123`), typo correction by position (letter where digit belongs), case and dash insensitive, show shop name before upload, remember the last shop, optional add-to-home-screen, a printable counter poster. Open risk: no verified per-address rate limit on customer requests.
