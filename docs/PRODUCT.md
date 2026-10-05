@@ -44,7 +44,7 @@ Working targets until the baseline replaces them (from `docs/BUILD_PHASES.md`): 
 The founder wants these kept in view while building. They are open, and nothing in the product depends on an answer yet.
 
 1. **Who pays?** Students are very price-sensitive; shopkeepers have thin margins. Options on the table: a fee to the shop, a fee to the student, advertising, or free at first. The August business notes proposed a shop subscription (about 299 and 699 rupees a month) as a hypothesis only. The survey gave no evidence about willingness to pay.
-2. **Ads.** Ads on a page used for a 60-second task earn little and add weight and clutter, which cuts against the speed goal. Not evaluated.
+2. **Ads.** Ads add page weight and clutter, which cuts against the speed goal. How much they would earn on a page used for a 60-second task is **unknown**; no data or comparison has been looked at.
 3. **Why are competitors not everywhere?** Competitors exist (the August notes name two). We do not know why they have not spread. This needs field research, not a guess.
 4. **Distribution.** Not decided. The August notes suggest founder-led onboarding in dense campus clusters first.
 5. **Design implication that is already safe:** keep the shopkeeper's cost near zero (free install, no hardware, no training) and make every step faster than WhatsApp, because adoption by shops comes before any pricing question.
