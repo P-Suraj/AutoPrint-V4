@@ -1,0 +1,32 @@
+:root { --bg: #f8fafc; --ink: #0f172a; --muted: #64748b; --line: #e2e8f0; --brand: #1d4ed8; --err: #b91c1c; --note: #fef3c7; }
+* { box-sizing: border-box; }
+body { margin: 0; font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink); background: var(--bg); }
+main { max-width: 480px; margin: 0 auto; padding: 20px 16px 48px; }
+h1 { font-size: 1.6rem; margin: 0 0 8px; }
+.eyebrow { margin: 0; color: var(--muted); font-size: .85rem; text-transform: uppercase; letter-spacing: .06em; }
+.code { font-family: ui-monospace, Consolas, monospace; letter-spacing: .1em; }
+section { display: grid; gap: 14px; margin-top: 16px; }
+label { display: grid; gap: 4px; font-weight: 600; font-size: .95rem; }
+label small { font-weight: 400; color: var(--muted); }
+input[type=text], input[type=number], select { font: inherit; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; width: 100%; }
+fieldset { display: grid; gap: 12px; border: 1px solid var(--line); border-radius: 12px; padding: 14px; background: #fff; }
+legend { padding: 0 6px; color: var(--muted); font-size: .85rem; }
+.file { border: 2px dashed var(--line); border-radius: 12px; padding: 20px; background: #fff; }
+button { font: inherit; border-radius: 12px; border: 1px solid var(--line); background: #fff; padding: 12px 16px; min-height: 48px; }
+button.primary { background: var(--brand); color: #fff; border-color: var(--brand); font-weight: 600; }
+button:disabled { opacity: .55; }
+button.link { border: 0; background: none; color: var(--brand); text-decoration: underline; }
+button.danger { color: var(--err); }
+.preview { display: grid; gap: 8px; justify-items: center; }
+.preview canvas { max-width: 100%; border: 1px solid var(--line); background: #fff; border-radius: 6px; }
+.pager { display: flex; gap: 12px; align-items: center; }
+.pager button { min-height: 40px; padding: 8px 12px; }
+.estimate, .meta { color: var(--muted); margin: 0; }
+.quote { display: grid; gap: 8px; padding: 16px; background: #fff; border: 1px solid var(--line); border-radius: 12px; }
+.total { font-size: 2.2rem; font-weight: 700; margin: 0; }
+.error { color: var(--err); font-weight: 600; }
+.note { background: var(--note); padding: 10px 12px; border-radius: 10px; }
+.jobs { list-style: none; padding: 0; display: grid; gap: 10px; }
+.jobs li { display: grid; gap: 2px; padding: 12px; background: #fff; border: 1px solid var(--line); border-radius: 12px; }
+.jobs span { color: var(--muted); }
+.jobs span[data-status=needs_attention], .jobs span[data-status=failed] { color: var(--err); }

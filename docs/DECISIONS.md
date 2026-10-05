@@ -46,7 +46,7 @@ F-1 isolated project and repo · F-2 first success target · F-3 web-only custom
 
 | Resource | Value | Verified |
 |---|---|---|
-| Supabase project ref | qgiutwhmqidnkcwbeuls (V4 only; V3 uses a different ref) | HTTPS API reachable and key accepted, 5 Oct 2026 |
+| Supabase project ref | qgiutwhmqidnkcwbeuls (V4 only; V3 uses a different ref); region Mumbai per founder, 5 Oct 2026 | HTTPS API reachable and key accepted, 5 Oct 2026 |
 | Supabase storage bucket | print-documents, private, 25 MiB limit, PDF only | Created and tested live 5 Oct 2026 |
 | Supabase SQL port (5432/6543) | Not reachable from the founder's current network (timeouts) | Migrations are applied by pasting supabase/_combined.sql into the SQL Editor |
 | Vercel project | autoprint-v4, connected to P-Suraj/AutoPrint-V4, region bom1 | Not yet deployed; no access from this machine |

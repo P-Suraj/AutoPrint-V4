@@ -4,9 +4,14 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "gen:client": "openapi-typescript ../../contracts/openapi.json -o ../../contracts/clients/ts/schema.d.ts"
+    "gen:client": "openapi-typescript ../../contracts/openapi.json -o ../../contracts/clients/ts/schema.d.ts",
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",
     "@types/react": "^18.3.31",

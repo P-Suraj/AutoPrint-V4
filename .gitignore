@@ -43,3 +43,5 @@ Thumbs.db
 desktop.ini
 .localdb/
 supabase/_combined.sql
+test-results/
+playwright-report/

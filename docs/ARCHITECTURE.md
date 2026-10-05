@@ -49,4 +49,4 @@ The founder cannot pay for an always-on host. The plan is Vercel serverless (reg
 4. **Upload size.** Files go straight to Supabase Storage by signed URL, not through the function. The finalize step downloads the file once (up to 25 MB) inside a function; V3 timed out at this step. Check against the function time limit.
 5. **Database connections.** Serverless needs the Supabase pooler, not a direct connection. Check the pooler address against the project's own dashboard.
 6. **Vercel Hobby plan terms.** As far as I know the free plan is for non-commercial use. A shop that pays for AutoPrint may need a paid plan. Check the current terms before the pilot.
-7. **Region.** The Supabase project's region is not recorded. Latency between bom1 and Supabase is the number to measure.
+7. **Region.** Founder confirmed 5 Oct 2026: Supabase and Vercel are both in Mumbai (Vercel `bom1`). That is the intended layout; the actual bom1-to-Supabase latency has not been measured yet.
