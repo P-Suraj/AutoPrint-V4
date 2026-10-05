@@ -197,13 +197,12 @@ class EnrollResponse(Strict):
     shop_name: str
 
 
-class HeartbeatRequest(Strict):
-    agent_version: str = Field(max_length=40)
+class LeaseResponse(Strict):
+    lease_expires_at: datetime
 
 
-class HeartbeatResponse(Strict):
-    server_time: datetime
-    contract_version: int = CONTRACT_VERSION
+class AckResponse(Strict):
+    status: str = "ok"
 
 
 class JobSummary(Strict):
@@ -219,10 +218,15 @@ class JobSummary(Strict):
     status: JobStatus
     created_at: datetime
     approval_expires_at: Optional[datetime]
+    attempt_count: int = Field(description="How many print attempts this job has had; more than 1 means a human retried it")
 
 
 class JobListResponse(Strict):
+    """The shop app's poll. Calling it is also the heartbeat: one request does both."""
+    shop_code: str
+    shop_name: str
     jobs: list[JobSummary]
+    contract_version: int = CONTRACT_VERSION
 
 
 class DocumentAccess(Strict):
@@ -267,3 +271,7 @@ class OutcomeRequest(AttemptAuth):
 class JobStatusResponse(Strict):
     job_id: UUID
     status: JobStatus
+
+
+class OutcomeResponse(Strict):
+    job_status: JobStatus

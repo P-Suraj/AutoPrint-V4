@@ -70,12 +70,16 @@ def make_storage(settings: Settings) -> Storage:
 def run_maintenance_once(db: Database, storage: Storage) -> dict:
     """Idempotent. Called every minute by the API process and directly by tests."""
     swept = db.call("sweep")
+    return {**swept, "documents_deleted": delete_due_documents(db, storage)}
+
+
+def delete_due_documents(db: Database, storage: Storage, limit: int = 100) -> int:
     deleted = 0
-    for document_id, key in db.rows("SELECT document_id, object_key FROM ap.documents_due_for_deletion(100)"):
+    for document_id, key in db.rows("SELECT document_id, object_key FROM ap.documents_due_for_deletion(%s)", (limit,)):
         storage.delete(key)                      # delete the object first; mark only after it is gone
         db.one("SELECT ap.mark_document_deleted(%s)", (document_id,))
         deleted += 1
-    return {**swept, "documents_deleted": deleted}
+    return deleted
 
 
 def create_app(settings: Optional[Settings] = None, *, contract_only: bool = False) -> FastAPI:
@@ -274,64 +278,95 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
 
     @customer.get("/orders/{order_id}", response_model=s.OrderView, operation_id="getOrder")
     def get_order(order_id: UUID, x_order_secret: str = Header(...)):
-        authorize_order(order_id, x_order_secret)
-        o = db.one("SELECT o.short_code, sh.name, o.status, o.expires_at, p.mode, p.status, p.amount_paise "
-                   "FROM ap.orders o JOIN ap.shops sh ON sh.id = o.shop_id LEFT JOIN ap.payments p ON p.order_id = o.id "
-                   "WHERE o.id = %s", (order_id,))
-        jobs = db.rows("SELECT j.id, d.original_name, j.status, j.current_attempt_id FROM ap.jobs j "
-                       "JOIN ap.documents d ON d.id = j.document_id WHERE j.order_id = %s ORDER BY j.created_at, j.id", (order_id,))
-        can_cancel = o[2] in ("draft", "submitted") and all(j[2] in CAN_CANCEL_JOB_STATES and j[3] is None for j in jobs)
+        # One database round trip: the secret check and the whole view happen in ap.order_view.
+        v = db.call("order_view", sha256_hex(x_order_secret))
+        if v["result"] != "ok" or v["order_id"] != str(order_id):
+            raise ApiException("order_not_found")
         return s.OrderView(
-            order_id=order_id, short_code=o[0], shop_name=o[1], status=o[2],
-            approval_expires_at=o[3] if o[2] == "submitted" else None,
-            payment_mode=o[4], payment_status=o[5], amount_paise=o[6], can_cancel=can_cancel,
-            jobs=[s.OrderJobView(job_id=j[0], document_name=j[1], status=j[2], customer_message=CUSTOMER_MESSAGE[s.JobStatus(j[2])])
-                  for j in jobs])
+            order_id=order_id, short_code=v["short_code"], shop_name=v["shop_name"], status=v["status"],
+            approval_expires_at=v["approval_expires_at"], payment_mode=v["payment_mode"], payment_status=v["payment_status"],
+            amount_paise=v["amount_paise"], can_cancel=v["can_cancel"],
+            jobs=[s.OrderJobView(job_id=j["job_id"], document_name=j["document_name"], status=j["status"],
+                                 customer_message=CUSTOMER_MESSAGE[s.JobStatus(j["status"])]) for j in v["jobs"]])
 
-    # ------------------------------------------------------------ shop desktop app (Phase 5)
+    # ------------------------------------------------------------ shop desktop app (X-Device-Id + X-Device-Secret)
+    def device(x_device_id: UUID, x_device_secret: str) -> UUID:
+        """Authenticate a device. Returns its id or raises 401. One extra round trip; the poll avoids it."""
+        res = db.call("authenticate_device", x_device_id, sha256_hex(x_device_secret))
+        if res["result"] != "ok":
+            raise ApiException("unauthorized")
+        return x_device_id
+
     @agent.post("/enroll", response_model=s.EnrollResponse, status_code=201, operation_id="enrollDevice")
     def enroll(body: s.EnrollRequest):
-        not_implemented()
-
-    @agent.post("/heartbeat", response_model=s.HeartbeatResponse, operation_id="heartbeat")
-    def heartbeat(body: s.HeartbeatRequest, x_device_id: UUID = Header(...), x_device_secret: str = Header(...)):
-        not_implemented()
+        secret = secrets.token_hex(32)
+        res = check(db.call("consume_enrollment", sha256_hex(body.enrollment_code.strip().upper()),
+                            body.display_name, sha256_hex(secret)))
+        return s.EnrollResponse(device_id=res["device_id"], device_secret=secret, shop_code=res["shop_code"], shop_name=res["shop_name"])
 
     @agent.get("/jobs", response_model=s.JobListResponse, operation_id="listJobs")
-    def list_jobs(x_device_id: UUID = Header(...), x_device_secret: str = Header(...)):
-        not_implemented()
+    def list_jobs(x_device_id: UUID = Header(...), x_device_secret: str = Header(...), x_agent_version: str = Header("")):
+        """The poll. Authenticates, records the heartbeat, sweeps when due, returns the queue: one round trip."""
+        res = check(db.call("agent_poll", x_device_id, sha256_hex(x_device_secret), x_agent_version or None))
+        if res.get("swept"):
+            delete_due_documents(db, storage, limit=10)       # at most once a minute, a few objects
+        return s.JobListResponse(shop_code=res["shop_code"], shop_name=res["shop_name"], jobs=res["jobs"])
 
     @agent.get("/jobs/{job_id}/document", response_model=s.DocumentAccess, operation_id="getJobDocument")
     def job_document(job_id: UUID, x_device_id: UUID = Header(...), x_device_secret: str = Header(...)):
-        not_implemented()
+        device(x_device_id, x_device_secret)
+        res = check(db.call("job_document", job_id, x_device_id))
+        return s.DocumentAccess(download_url=storage.create_download_url(res["object_key"]), sha256=res["sha256"], byte_size=res["bytes"])
 
     @agent.post("/jobs/{job_id}/approve", response_model=s.JobStatusResponse, operation_id="approveJob")
     def approve(job_id: UUID, x_device_id: UUID = Header(...), x_device_secret: str = Header(...)):
-        not_implemented()
+        device(x_device_id, x_device_secret)
+        check(db.call("approve_job", job_id, x_device_id))
+        return s.JobStatusResponse(job_id=job_id, status=s.JobStatus.approved)
 
     @agent.post("/jobs/{job_id}/reject", response_model=s.JobStatusResponse, operation_id="rejectJob")
     def reject(job_id: UUID, body: s.RejectRequest, x_device_id: UUID = Header(...), x_device_secret: str = Header(...)):
-        not_implemented()
+        device(x_device_id, x_device_secret)
+        check(db.call("reject_job", job_id, x_device_id, body.reason))
+        return s.JobStatusResponse(job_id=job_id, status=s.JobStatus.rejected)
 
     @agent.post("/jobs/{job_id}/resolve", response_model=s.JobStatusResponse, operation_id="resolveJob")
     def resolve(job_id: UUID, body: s.ResolveRequest, x_device_id: UUID = Header(...), x_device_secret: str = Header(...)):
-        not_implemented()
+        device(x_device_id, x_device_secret)
+        res = check(db.call("resolve_job", job_id, x_device_id, body.resolution.value, body.note))
+        return s.JobStatusResponse(job_id=job_id, status=res["job_status"])
 
     @agent.post("/claim", response_model=s.ClaimResponse, operation_id="claimNextJob")
     def claim(x_device_id: UUID = Header(...), x_device_secret: str = Header(...)):
-        not_implemented()
+        device(x_device_id, x_device_secret)
+        res = check(db.call("claim_next_job", x_device_id, 300))
+        if res["result"] == "no_job":
+            return s.ClaimResponse(status="no_job")
+        doc = res["document"]
+        return s.ClaimResponse(
+            status="claimed", job_id=res["job_id"], attempt_id=res["attempt_id"], attempt_token=res["attempt_token"],
+            spooler_job_name=res["spooler_job_name"], lease_expires_at=res["lease_expires_at"],
+            document=s.DocumentAccess(download_url=storage.create_download_url(doc["object_key"]), sha256=doc["sha256"], byte_size=doc["bytes"]),
+            options=s.PrintOptions(copies=res["options"]["copies"], color=res["options"]["color"], duplex=res["options"]["duplex"],
+                                   page_range=res["options"]["page_range"]))
 
-    @agent.post("/attempts/{attempt_id}/renew", response_model=s.HeartbeatResponse, operation_id="renewLease")
+    @agent.post("/attempts/{attempt_id}/renew", response_model=s.LeaseResponse, operation_id="renewLease")
     def renew(attempt_id: UUID, body: s.RenewRequest, x_device_id: UUID = Header(...), x_device_secret: str = Header(...)):
-        not_implemented()
+        device(x_device_id, x_device_secret)
+        res = check(db.call("renew_lease", attempt_id, body.attempt_token, x_device_id, body.lease_seconds))
+        return s.LeaseResponse(lease_expires_at=res["lease_expires_at"])
 
-    @agent.post("/attempts/{attempt_id}/sent", response_model=s.HeartbeatResponse, operation_id="markSentToSpooler")
+    @agent.post("/attempts/{attempt_id}/sent", response_model=s.AckResponse, operation_id="markSentToSpooler")
     def sent(attempt_id: UUID, body: s.AttemptAuth, x_device_id: UUID = Header(...), x_device_secret: str = Header(...)):
-        not_implemented()
+        device(x_device_id, x_device_secret)
+        check(db.call("mark_sent", attempt_id, body.attempt_token, x_device_id))
+        return s.AckResponse()
 
-    @agent.post("/attempts/{attempt_id}/outcome", response_model=s.JobStatusResponse, operation_id="reportOutcome")
+    @agent.post("/attempts/{attempt_id}/outcome", response_model=s.OutcomeResponse, operation_id="reportOutcome")
     def outcome(attempt_id: UUID, body: s.OutcomeRequest, x_device_id: UUID = Header(...), x_device_secret: str = Header(...)):
-        not_implemented()
+        device(x_device_id, x_device_secret)
+        res = check(db.call("report_outcome", attempt_id, body.attempt_token, x_device_id, body.outcome.value, body.evidence))
+        return s.OutcomeResponse(job_status=res.get("job_status") or ("needs_attention" if body.outcome.value == "uncertain" else body.outcome.value))
 
     app.include_router(customer)
     app.include_router(agent)
@@ -360,14 +395,25 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
                 raise ApiException("document_not_found")
             return Response(content=data, media_type="application/pdf")
 
+    def require_maintenance_token(token: str) -> None:
+        import hmac
+        if not settings.maintenance_token or not hmac.compare_digest(
+                sha256_hex(token), sha256_hex(settings.maintenance_token)):
+            raise ApiException("unauthorized")
+
     @app.post("/v1/internal/maintenance", include_in_schema=False)
     def maintenance(x_maintenance_token: str = Header("")):
         """Called by a scheduler (free GitHub Actions cron) on hosts with no background thread."""
-        import hmac
-        if not settings.maintenance_token or not hmac.compare_digest(
-                sha256_hex(x_maintenance_token), sha256_hex(settings.maintenance_token)):
-            raise ApiException("unauthorized")
+        require_maintenance_token(x_maintenance_token)
         return run_maintenance_once(db, storage)
+
+    @app.post("/v1/internal/migrate", include_in_schema=False)
+    def migrate(x_maintenance_token: str = Header("")):
+        """Applies pending repo migration files. Needed because the database port is not reachable from the
+        founder's network; the deployed API can reach it. Runs repo files only, never request input."""
+        require_maintenance_token(x_maintenance_token)
+        from app.migrate import apply_pending
+        return apply_pending(settings.database_url)
 
     @app.get("/health", tags=["platform"], operation_id="health")
     def health():

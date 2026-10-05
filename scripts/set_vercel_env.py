@@ -51,8 +51,14 @@ def main() -> int:
         "AUTOPRINT_V4_ALLOWED_ORIGINS": SITE,
         "AUTOPRINT_V4_BACKGROUND_MAINTENANCE": "false",
     }
-    if not args.keep_maintenance_token:
-        values["AUTOPRINT_V4_MAINTENANCE_TOKEN"] = secrets.token_hex(24)
+    # The maintenance token must also exist locally (git-ignored .env) so scripts can call the protected
+    # endpoints. Generate it once, save it, and reuse it unless a new one is requested.
+    token = env.get("AUTOPRINT_V4_MAINTENANCE_TOKEN")
+    if not token:
+        token = secrets.token_hex(24)
+        with (ROOT / ".env").open("a", encoding="utf-8", newline="\n") as f:
+            f.write(f"AUTOPRINT_V4_MAINTENANCE_TOKEN={token}\n")
+    values["AUTOPRINT_V4_MAINTENANCE_TOKEN"] = token
     sensitive = {"AUTOPRINT_V4_DATABASE_URL", "AUTOPRINT_V4_SUPABASE_SECRET_KEY", "AUTOPRINT_V4_MAINTENANCE_TOKEN"}
 
     for name, value in values.items():

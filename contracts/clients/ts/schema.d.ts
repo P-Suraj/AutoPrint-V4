@@ -123,23 +123,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/agent/heartbeat": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Heartbeat */
-        post: operations["heartbeat"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/agent/jobs": {
         parameters: {
             query?: never;
@@ -147,7 +130,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Jobs */
+        /**
+         * List Jobs
+         * @description The poll. Authenticates, records the heartbeat, sweeps when due, returns the queue: one round trip.
+         */
         get: operations["listJobs"];
         put?: never;
         post?: never;
@@ -382,6 +368,14 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AckResponse */
+        AckResponse: {
+            /**
+             * Status
+             * @default ok
+             */
+            status: string;
+        };
         /** AttemptAuth */
         AttemptAuth: {
             /** Attempt Token */
@@ -517,28 +511,22 @@ export interface components {
             /** Sha256 */
             sha256: string;
         };
-        /** HeartbeatRequest */
-        HeartbeatRequest: {
-            /** Agent Version */
-            agent_version: string;
-        };
-        /** HeartbeatResponse */
-        HeartbeatResponse: {
+        /**
+         * JobListResponse
+         * @description The shop app's poll. Calling it is also the heartbeat: one request does both.
+         */
+        JobListResponse: {
             /**
              * Contract Version
              * @default 1
              */
             contract_version: number;
-            /**
-             * Server Time
-             * Format: date-time
-             */
-            server_time: string;
-        };
-        /** JobListResponse */
-        JobListResponse: {
             /** Jobs */
             jobs: components["schemas"]["JobSummary"][];
+            /** Shop Code */
+            shop_code: string;
+            /** Shop Name */
+            shop_name: string;
         };
         /**
          * JobStatus
@@ -560,6 +548,11 @@ export interface components {
             amount_paise: number;
             /** Approval Expires At */
             approval_expires_at: string | null;
+            /**
+             * Attempt Count
+             * @description How many print attempts this job has had; more than 1 means a human retried it
+             */
+            attempt_count: number;
             /** Color */
             color: boolean;
             /** Copies */
@@ -585,6 +578,14 @@ export interface components {
             /** Page Range */
             page_range: string | null;
             status: components["schemas"]["JobStatus"];
+        };
+        /** LeaseResponse */
+        LeaseResponse: {
+            /**
+             * Lease Expires At
+             * Format: date-time
+             */
+            lease_expires_at: string;
         };
         /** OrderJobView */
         OrderJobView: {
@@ -647,6 +648,10 @@ export interface components {
                 [key: string]: unknown;
             };
             outcome: components["schemas"]["Outcome"];
+        };
+        /** OutcomeResponse */
+        OutcomeResponse: {
+            job_status: components["schemas"]["JobStatus"];
         };
         /**
          * PaymentMode
@@ -922,7 +927,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JobStatusResponse"];
+                    "application/json": components["schemas"]["OutcomeResponse"];
                 };
             };
             /** @description Bad Request */
@@ -1059,7 +1064,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HeartbeatResponse"];
+                    "application/json": components["schemas"]["LeaseResponse"];
                 };
             };
             /** @description Bad Request */
@@ -1196,7 +1201,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HeartbeatResponse"];
+                    "application/json": components["schemas"]["AckResponse"];
                 };
             };
             /** @description Bad Request */
@@ -1572,147 +1577,13 @@ export interface operations {
             };
         };
     };
-    heartbeat: {
-        parameters: {
-            query?: never;
-            header: {
-                "x-device-id": string;
-                "x-device-secret": string;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["HeartbeatRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HeartbeatResponse"];
-                };
-            };
-            /** @description Bad Request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Unauthorized */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Gone */
-            410: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Content Too Large */
-            413: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Unprocessable Content */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Upgrade Required */
-            426: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Too Many Requests */
-            429: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Internal Server Error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Not Implemented */
-            501: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Service Unavailable */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
     listJobs: {
         parameters: {
             query?: never;
             header: {
                 "x-device-id": string;
                 "x-device-secret": string;
+                "x-agent-version"?: string;
             };
             path?: never;
             cookie?: never;

@@ -71,10 +71,8 @@ def test_customer_wording_never_claims_printed():
         assert not re.search(r"printed", text, re.I), f"{status}: {text}"
 
 
-def test_stub_handlers_answer_with_the_error_envelope():
+def test_health_reports_the_contract_version():
     client = TestClient(app)
-    r = client.post("/v1/agent/enroll", json={"enrollment_code": "ABCDEFGH", "display_name": "PC"})
-    assert r.status_code == 501 and r.json() == {"error": {"code": "not_implemented", "message": "Not implemented yet."}}
     assert client.get("/health").json()["contract_version"] == schemas.CONTRACT_VERSION
 
 
