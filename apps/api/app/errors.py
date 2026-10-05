@@ -54,6 +54,7 @@ CATALOG: dict[str, ApiError] = {e.code: e for e in [
     ApiError("invalid_resolution", 422, "Unknown resolution."),
     ApiError("invalid_lease", 422, "Lease must be between 30 and 900 seconds."),
     # protocol / platform
+    ApiError("invalid_request", 422, "The request is not valid."),
     ApiError("contract_mismatch", 426, "This app is out of date. Please update AutoPrint."),
     ApiError("rate_limited", 429, "Too many requests. Please wait a moment."),
     ApiError("not_implemented", 501, "Not implemented yet."),

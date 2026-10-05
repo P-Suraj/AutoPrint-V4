@@ -13,7 +13,9 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from app import schemas  # noqa: E402
 from app.errors import CATALOG, SQL_RESULT_MAP, SQL_SUCCESS  # noqa: E402
-from app.main import app  # noqa: E402
+from app.main import create_app  # noqa: E402
+
+app = create_app(contract_only=True)
 
 MIGRATIONS = ROOT / "supabase" / "migrations"
 
@@ -71,7 +73,7 @@ def test_customer_wording_never_claims_printed():
 
 def test_stub_handlers_answer_with_the_error_envelope():
     client = TestClient(app)
-    r = client.get("/v1/shops/ABC123")
+    r = client.post("/v1/agent/enroll", json={"enrollment_code": "ABCDEFGH", "display_name": "PC"})
     assert r.status_code == 501 and r.json() == {"error": {"code": "not_implemented", "message": "Not implemented yet."}}
     assert client.get("/health").json()["contract_version"] == schemas.CONTRACT_VERSION
 
@@ -82,7 +84,7 @@ def test_every_operation_has_a_unique_id_and_declares_errors():
     for path, methods in spec["paths"].items():
         for method, op in methods.items():
             ids.append(op["operationId"])
-            if path != "/health":
+            if not path.startswith("/health"):
                 assert "409" in op["responses"] or "404" in op["responses"], f"{method} {path} declares no errors"
     assert len(ids) == len(set(ids))
 

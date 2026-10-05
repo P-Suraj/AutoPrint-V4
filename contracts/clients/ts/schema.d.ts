@@ -21,6 +21,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/health/ready": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Health Ready */
+        get: operations["healthReady"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/agent/attempts/{attempt_id}/outcome": {
         parameters: {
             query?: never;
@@ -729,7 +746,10 @@ export interface components {
         };
         /** RegisterDocumentRequest */
         RegisterDocumentRequest: {
-            /** Byte Size */
+            /**
+             * Byte Size
+             * @description At most 26214400 (25 MiB); larger is refused with file_too_large
+             */
             byte_size: number;
             /** Content Type */
             content_type: string;
@@ -839,6 +859,26 @@ export interface components {
 export type $defs = Record<string, never>;
 export interface operations {
     health: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    healthReady: {
         parameters: {
             query?: never;
             header?: never;

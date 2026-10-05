@@ -98,7 +98,7 @@ class CreateOrderResponse(Strict):
 
 class RegisterDocumentRequest(Strict):
     file_name: str = Field(min_length=1, max_length=255)
-    byte_size: int = Field(ge=1, le=26_214_400)
+    byte_size: int = Field(ge=1, description="At most 26214400 (25 MiB); larger is refused with file_too_large")
     content_type: str = Field(pattern="^application/pdf$")
 
 

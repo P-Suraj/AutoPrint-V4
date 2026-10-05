@@ -22,7 +22,11 @@ _RANGE_RE = re.compile(r"^\d+(-\d+)?(\s*,\s*\d+(-\d+)?)*$")
 
 
 class PricingError(ValueError):
-    """Raised for invalid user input or an invalid rate card. Message is safe to show."""
+    """Raised for invalid user input or an invalid rate card. `code` is a key in app.errors.CATALOG."""
+
+    def __init__(self, message: str, code: str = "invalid_items"):
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass(frozen=True)
@@ -39,7 +43,7 @@ def parse_page_range(page_range: str | None, page_count: int) -> list[int]:
         return list(range(1, page_count + 1))
     text = page_range.strip()
     if not _RANGE_RE.match(text):
-        raise PricingError("Page range must look like 1-5, 8, 11-15")
+        raise PricingError("Page range must look like 1-5, 8, 11-15", "invalid_page_range")
     pages: set[int] = set()
     for part in text.split(","):
         part = part.strip()
@@ -49,7 +53,7 @@ def parse_page_range(page_range: str | None, page_count: int) -> list[int]:
         else:
             start = end = int(part)
         if start < 1 or end < start or end > page_count:
-            raise PricingError(f"Page range must stay between 1 and {page_count}")
+            raise PricingError(f"Page range must stay between 1 and {page_count}", "invalid_page_range")
         pages.update(range(start, end + 1))
     return sorted(pages)
 
@@ -61,30 +65,30 @@ def validate_rules(rules: dict) -> None:
             try:
                 slabs = rules[color][sides]
             except (KeyError, TypeError):
-                raise PricingError(f"Rate card is missing {color}.{sides}") from None
+                raise PricingError(f"Rate card is missing {color}.{sides}", "no_rate_card") from None
             if not isinstance(slabs, list) or not slabs:
-                raise PricingError(f"Rate card {color}.{sides} needs at least one slab")
+                raise PricingError(f"Rate card {color}.{sides} needs at least one slab", "no_rate_card")
             expected_from = 1
             for i, slab in enumerate(slabs):
                 lo, hi, rate = slab.get("from_sides"), slab.get("to_sides"), slab.get("paise_per_side")
                 if not (isinstance(lo, int) and isinstance(rate, int)) or isinstance(lo, bool) or isinstance(rate, bool):
-                    raise PricingError(f"Rate card {color}.{sides} slab {i + 1} must use whole numbers")
+                    raise PricingError(f"Rate card {color}.{sides} slab {i + 1} must use whole numbers", "no_rate_card")
                 if lo != expected_from or rate < 0:
-                    raise PricingError(f"Rate card {color}.{sides} slabs must start at 1 and leave no gaps")
+                    raise PricingError(f"Rate card {color}.{sides} slabs must start at 1 and leave no gaps", "no_rate_card")
                 last = i == len(slabs) - 1
                 if last:
                     if hi is not None:
-                        raise PricingError(f"Rate card {color}.{sides}: the last slab must have no upper limit")
+                        raise PricingError(f"Rate card {color}.{sides}: the last slab must have no upper limit", "no_rate_card")
                 else:
                     if not isinstance(hi, int) or isinstance(hi, bool) or hi < lo:
-                        raise PricingError(f"Rate card {color}.{sides} slab {i + 1} has an invalid upper limit")
+                        raise PricingError(f"Rate card {color}.{sides} slab {i + 1} has an invalid upper limit", "no_rate_card")
                     expected_from = hi + 1
 
 
 def price_job(*, page_count: int, copies: int, color: bool, duplex: bool,
               page_range: str | None, rules: dict) -> Price:
     if not isinstance(copies, int) or isinstance(copies, bool) or not 1 <= copies <= MAX_COPIES:
-        raise PricingError(f"Copies must be between 1 and {MAX_COPIES}")
+        raise PricingError(f"Copies must be between 1 and {MAX_COPIES}", "invalid_copies")
     if page_count < 1:
         raise PricingError("Document has no pages")
     validate_rules(rules)

@@ -4,7 +4,7 @@ import uuid
 
 import pytest
 
-from conftest import sha
+from dbtools import sha
 from test_completion_rule import GOOD
 from test_state_machine import approved_job, claim
 

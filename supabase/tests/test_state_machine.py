@@ -4,7 +4,7 @@ import uuid
 import psycopg2
 import pytest
 
-from conftest import run_in_threads, sha
+from dbtools import run_in_threads, sha
 
 
 def claim(db, device_id, lease=300):
@@ -21,7 +21,7 @@ def approved_job(shop, db, device_id=None):
 
 # ------------------------------------------------------------------ migrations
 def test_migrations_apply_to_empty_database_twice(db_url):
-    from conftest import build_database, drop_database
+    from dbtools import build_database, drop_database
     for i in range(2):
         name = "v4_fresh_" + uuid.uuid4().hex[:8]
         build_database(name)

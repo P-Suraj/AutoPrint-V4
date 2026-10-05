@@ -867,7 +867,7 @@
         "additionalProperties": false,
         "properties": {
           "byte_size": {
-            "maximum": 26214400.0,
+            "description": "At most 26214400 (25 MiB); larger is refused with file_too_large",
             "minimum": 1.0,
             "title": "Byte Size",
             "type": "integer"
@@ -1123,7 +1123,7 @@
   "info": {
     "description": "Single contract for the customer web app and the shop desktop app.",
     "title": "AutoPrint V4 API",
-    "version": "0.1.0"
+    "version": "0.2.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -1141,6 +1141,25 @@
           }
         },
         "summary": "Health",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "operationId": "healthReady",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health Ready",
         "tags": [
           "platform"
         ]

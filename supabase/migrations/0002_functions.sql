@@ -197,7 +197,7 @@ END $$;
 -- p_items: [{"document_id": uuid, "copies": int, "color": bool, "duplex": bool,
 --            "page_range": text|null, "selected_pages": int, "printed_sides": int, "amount_paise": int}]
 -- The API prices the items. This function re-checks ownership, page bounds and the total.
-CREATE FUNCTION ap.create_quote(p_order_id uuid, p_items jsonb, p_total_paise integer) RETURNS jsonb
+CREATE FUNCTION ap.create_quote(p_order_id uuid, p_items jsonb, p_total_paise integer, p_rate_card_id uuid DEFAULT NULL) RETURNS jsonb
 LANGUAGE plpgsql AS $$
 DECLARE o ap.orders%ROWTYPE; rc ap.rate_cards%ROWTYPE; q_id uuid; it jsonb; d ap.documents%ROWTYPE; sum_paise integer := 0;
 BEGIN
@@ -210,6 +210,8 @@ BEGIN
   END IF;
   SELECT * INTO rc FROM ap.rate_cards WHERE shop_id = o.shop_id AND retired_at IS NULL;
   IF NOT FOUND THEN RETURN jsonb_build_object('result', 'no_rate_card'); END IF;
+  -- the API prices against one specific rate card; if the shop changed it meanwhile, ask the caller to retry
+  IF p_rate_card_id IS NOT NULL AND p_rate_card_id <> rc.id THEN RETURN jsonb_build_object('result', 'try_again'); END IF;
 
   -- validate every item before inserting anything
   FOR it IN SELECT * FROM jsonb_array_elements(p_items) LOOP
