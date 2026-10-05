@@ -10,7 +10,7 @@
 | 0 Approvals and repository | all decisions recorded, pushed, founder confirms | Mostly done. O-items answered, D-5/D-12/D-15/D-18 approved; the other D-items are still PROPOSED. Founder written confirmation not given as a single statement |
 | 1 Print spike | physical printer, 30 normal prints, completion rule, engine chosen | **NOT PASSED.** Virtual printer only (founder-allowed). 30/30 normal prints, completion rule v1 written, engine provisional. Physical-printer run, duplex/colour and real failure drills outstanding. See `docs/PRINT_SPIKE_REPORT.md` |
 | 2 Contracts | see checklist below | Done except the C# client |
-| 3 Backend slice | not started | |
+| 3 Backend slice | customer API built and tested locally (45 integration tests) against a real PostgreSQL; Supabase storage backend verified live; **database not yet created on Supabase and nothing deployed** | In progress |
 | 4-10 | not started | |
 
 ## Phase 2 checklist
@@ -32,6 +32,15 @@
 - Database tests (state machine, completion rule, transition matrix): pass
 - API tests (pricing, contract checks): pass
 - Full count is recorded in the commit message of the latest commit.
+
+## Phase 3 progress (5 Oct 2026)
+
+- Customer routes implemented; PDF validation by structure (rejects a multipart envelope; accepts valid files that contain the bytes /JS).
+- `SupabaseStorage` verified against the live V4 project (5 tests: private bucket, raw PUT, signed download, PDF-only, signed URL scoped to one object).
+- Founder admin script `scripts/ap_admin.py` (create shop, set rates, issue enrollment code, list jobs, revoke device) tested.
+- `supabase/_combined.sql` (generated, git-ignored) is verified to apply once to an empty database and to refuse a second run.
+- NOT done: apply the schema to Supabase, deploy to Vercel, measure latency, GitHub Actions maintenance cron.
+- Blocked: this network cannot reach Supabase's SQL ports. The schema must be pasted into the SQL Editor by the founder.
 
 ## Findings so far
 

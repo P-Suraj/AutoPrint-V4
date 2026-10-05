@@ -1,0 +1,295 @@
+{
+  "rules": {
+    "bw": {
+      "simplex": [
+        {
+          "from_sides": 1,
+          "to_sides": 9,
+          "paise_per_side": 200
+        },
+        {
+          "from_sides": 10,
+          "to_sides": null,
+          "paise_per_side": 150
+        }
+      ],
+      "duplex": [
+        {
+          "from_sides": 1,
+          "to_sides": null,
+          "paise_per_side": 120
+        }
+      ]
+    },
+    "color": {
+      "simplex": [
+        {
+          "from_sides": 1,
+          "to_sides": null,
+          "paise_per_side": 1000
+        }
+      ],
+      "duplex": [
+        {
+          "from_sides": 1,
+          "to_sides": null,
+          "paise_per_side": 800
+        }
+      ]
+    }
+  },
+  "cases": [
+    {
+      "page_count": 3,
+      "copies": 1,
+      "color": false,
+      "duplex": false,
+      "page_range": null,
+      "expect": {
+        "selected_pages": 3,
+        "printed_sides": 3,
+        "paise_per_side": 200,
+        "amount_paise": 600
+      }
+    },
+    {
+      "page_count": 3,
+      "copies": 3,
+      "color": false,
+      "duplex": false,
+      "page_range": null,
+      "expect": {
+        "selected_pages": 3,
+        "printed_sides": 9,
+        "paise_per_side": 200,
+        "amount_paise": 1800
+      }
+    },
+    {
+      "page_count": 3,
+      "copies": 4,
+      "color": false,
+      "duplex": false,
+      "page_range": null,
+      "expect": {
+        "selected_pages": 3,
+        "printed_sides": 12,
+        "paise_per_side": 150,
+        "amount_paise": 1800
+      }
+    },
+    {
+      "page_count": 9,
+      "copies": 1,
+      "color": false,
+      "duplex": false,
+      "page_range": null,
+      "expect": {
+        "selected_pages": 9,
+        "printed_sides": 9,
+        "paise_per_side": 200,
+        "amount_paise": 1800
+      }
+    },
+    {
+      "page_count": 10,
+      "copies": 1,
+      "color": false,
+      "duplex": false,
+      "page_range": null,
+      "expect": {
+        "selected_pages": 10,
+        "printed_sides": 10,
+        "paise_per_side": 150,
+        "amount_paise": 1500
+      }
+    },
+    {
+      "page_count": 3,
+      "copies": 1,
+      "color": false,
+      "duplex": true,
+      "page_range": null,
+      "expect": {
+        "selected_pages": 3,
+        "printed_sides": 3,
+        "paise_per_side": 120,
+        "amount_paise": 360
+      }
+    },
+    {
+      "page_count": 3,
+      "copies": 1,
+      "color": true,
+      "duplex": false,
+      "page_range": null,
+      "expect": {
+        "selected_pages": 3,
+        "printed_sides": 3,
+        "paise_per_side": 1000,
+        "amount_paise": 3000
+      }
+    },
+    {
+      "page_count": 3,
+      "copies": 2,
+      "color": true,
+      "duplex": true,
+      "page_range": null,
+      "expect": {
+        "selected_pages": 3,
+        "printed_sides": 6,
+        "paise_per_side": 800,
+        "amount_paise": 4800
+      }
+    },
+    {
+      "page_count": 10,
+      "copies": 1,
+      "color": false,
+      "duplex": false,
+      "page_range": "2-4",
+      "expect": {
+        "selected_pages": 3,
+        "printed_sides": 3,
+        "paise_per_side": 200,
+        "amount_paise": 600
+      }
+    },
+    {
+      "page_count": 10,
+      "copies": 1,
+      "color": false,
+      "duplex": false,
+      "page_range": "1-3, 2, 5",
+      "expect": {
+        "selected_pages": 4,
+        "printed_sides": 4,
+        "paise_per_side": 200,
+        "amount_paise": 800
+      }
+    },
+    {
+      "page_count": 10,
+      "copies": 1,
+      "color": false,
+      "duplex": false,
+      "page_range": "1,1,1",
+      "expect": {
+        "selected_pages": 1,
+        "printed_sides": 1,
+        "paise_per_side": 200,
+        "amount_paise": 200
+      }
+    },
+    {
+      "page_count": 10,
+      "copies": 10,
+      "color": false,
+      "duplex": false,
+      "page_range": "1-5",
+      "expect": {
+        "selected_pages": 5,
+        "printed_sides": 50,
+        "paise_per_side": 150,
+        "amount_paise": 7500
+      }
+    },
+    {
+      "page_count": 1,
+      "copies": 100,
+      "color": false,
+      "duplex": false,
+      "page_range": null,
+      "expect": {
+        "selected_pages": 1,
+        "printed_sides": 100,
+        "paise_per_side": 150,
+        "amount_paise": 15000
+      }
+    },
+    {
+      "page_count": 5,
+      "copies": 1,
+      "color": false,
+      "duplex": false,
+      "page_range": "  ",
+      "expect": {
+        "selected_pages": 5,
+        "printed_sides": 5,
+        "paise_per_side": 200,
+        "amount_paise": 1000
+      }
+    },
+    {
+      "page_count": 10,
+      "copies": 1,
+      "color": false,
+      "duplex": false,
+      "page_range": "0",
+      "expect": {
+        "error": "invalid_page_range"
+      }
+    },
+    {
+      "page_count": 10,
+      "copies": 1,
+      "color": false,
+      "duplex": false,
+      "page_range": "11",
+      "expect": {
+        "error": "invalid_page_range"
+      }
+    },
+    {
+      "page_count": 10,
+      "copies": 1,
+      "color": false,
+      "duplex": false,
+      "page_range": "3-1",
+      "expect": {
+        "error": "invalid_page_range"
+      }
+    },
+    {
+      "page_count": 10,
+      "copies": 1,
+      "color": false,
+      "duplex": false,
+      "page_range": "1-",
+      "expect": {
+        "error": "invalid_page_range"
+      }
+    },
+    {
+      "page_count": 10,
+      "copies": 1,
+      "color": false,
+      "duplex": false,
+      "page_range": "a",
+      "expect": {
+        "error": "invalid_page_range"
+      }
+    },
+    {
+      "page_count": 3,
+      "copies": 0,
+      "color": false,
+      "duplex": false,
+      "page_range": null,
+      "expect": {
+        "error": "invalid_copies"
+      }
+    },
+    {
+      "page_count": 3,
+      "copies": 101,
+      "color": false,
+      "duplex": false,
+      "page_range": null,
+      "expect": {
+        "error": "invalid_copies"
+      }
+    }
+  ]
+}

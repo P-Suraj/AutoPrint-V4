@@ -356,3 +356,21 @@ def test_logs_never_contain_secrets_signed_urls_or_file_names(flow, caplog):
         assert forbidden not in text, f"log leaked {forbidden[:12]}..."
     assert "POST /v1/orders/{order_id}/documents" in text          # the route template is logged, not the URL
 
+
+
+# ------------------------------------------------------------------ scheduled maintenance for serverless hosts
+def test_maintenance_endpoint_needs_the_token(api_db_url, tmp_path):
+    from dataclasses import replace
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+    from app.settings import Settings
+    s = Settings(database_url=api_db_url, local_storage_dir=str(tmp_path / "f"), public_base_url="http://testserver",
+                 signing_key="k" * 40, maintenance_token="t" * 40, background_maintenance=False).validate()
+    with TestClient(create_app(s)) as c:
+        assert c.post("/v1/internal/maintenance").status_code == 401
+        assert c.post("/v1/internal/maintenance", headers={"X-Maintenance-Token": "wrong"}).status_code == 401
+        ok = c.post("/v1/internal/maintenance", headers={"X-Maintenance-Token": "t" * 40})
+        assert ok.status_code == 200 and "stale_attempts" in ok.json() and "documents_deleted" in ok.json()
+    unset = replace(s, maintenance_token="")
+    with TestClient(create_app(unset)) as c:
+        assert c.post("/v1/internal/maintenance", headers={"X-Maintenance-Token": ""}).status_code == 401   # disabled when no token is set

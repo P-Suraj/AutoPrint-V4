@@ -84,3 +84,21 @@ def test_invalid_rate_cards_are_refused(mutate, why):
 
 def test_valid_rate_card_passes():
     validate_rules(RULES)
+
+
+def test_python_matches_the_shared_pricing_vectors():
+    """contracts/pricing_vectors.json is also run by the web app's TypeScript estimator."""
+    import json
+    from pathlib import Path
+    data = json.loads((Path(__file__).resolve().parents[3] / "contracts" / "pricing_vectors.json").read_text(encoding="utf-8"))
+    for case in data["cases"]:
+        args = {k: case[k] for k in ("page_count", "copies", "color", "duplex", "page_range")}
+        expect = case["expect"]
+        if "error" in expect:
+            with pytest.raises(PricingError) as e:
+                price_job(rules=data["rules"], **args)
+            assert e.value.code == expect["error"], case
+        else:
+            p = price_job(rules=data["rules"], **args)
+            assert {"selected_pages": p.selected_pages, "printed_sides": p.printed_sides,
+                    "paise_per_side": p.paise_per_side, "amount_paise": p.amount_paise} == expect, case

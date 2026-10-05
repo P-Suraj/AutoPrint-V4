@@ -37,3 +37,16 @@ Phone browser ──HTTPS──► API (always-on, same region as the DB) ──
 ## What is deliberately absent
 
 No queue broker, no cache, no worker fleet, no search engine, no service mesh, no second database. PDF validation runs inside the API process in a bounded worker thread. If a limit is reached, the answer is a measured change, not a guess.
+
+
+## Revision 2026-10-05: free-tier hosting (decision O-4)
+
+The founder cannot pay for an always-on host. The plan is Vercel serverless (region bom1) for the API and web, Supabase for the database and storage, and a free scheduler for maintenance. Consequences, none of them yet measured:
+
+1. **No background thread.** `POST /v1/internal/maintenance` (token-protected) runs the sweep and the retention deletion. A GitHub Actions cron should call it about every 5 minutes. Lease expiry is also swept by the agent's own polling.
+2. **No WebSocket.** The desktop app polls about every 10 s. That is roughly 260,000 requests a month per shop; compare with the Vercel plan limit before relying on it.
+3. **Cold starts.** The first request after idle can be slow. V3 suffered here. Measure upload to quote on the deployed API before trusting it.
+4. **Upload size.** Files go straight to Supabase Storage by signed URL, not through the function. The finalize step downloads the file once (up to 25 MB) inside a function; V3 timed out at this step. Check against the function time limit.
+5. **Database connections.** Serverless needs the Supabase pooler, not a direct connection. Check the pooler address against the project's own dashboard.
+6. **Vercel Hobby plan terms.** As far as I know the free plan is for non-commercial use. A shop that pays for AutoPrint may need a paid plan. Check the current terms before the pilot.
+7. **Region.** The Supabase project's region is not recorded. Latency between bom1 and Supabase is the number to measure.

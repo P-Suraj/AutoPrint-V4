@@ -1,8 +1,7 @@
 """Document storage behind a small interface.
 
-LocalStorage is for development and tests. The Supabase implementation is added in Phase 3's
-deployment step, once a V4 Supabase project exists, and verified against it. Nothing here claims
-to work against Supabase.
+LocalStorage is for development and tests. SupabaseStorage talks to Supabase Storage over HTTPS and
+was verified against a live V4 project by apps/api/tests/test_supabase_storage_live.py.
 
 Rules every implementation must follow:
   * objects are private; access is only by short-lived signed URL or by the API itself
@@ -18,6 +17,9 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Protocol
+from urllib.parse import quote
+
+import httpx
 
 
 @dataclass(frozen=True)
@@ -95,3 +97,49 @@ class LocalStorage:
 
     def exists(self, key: str) -> bool:
         return self._path(key).exists()
+
+
+class SupabaseStorage:
+    """Supabase Storage over its HTTPS API (port 443 only). The bucket is private.
+
+    The secret key stays on the server. The browser receives only a signed upload URL, which accepts
+    a raw PUT of the PDF bytes.
+    """
+
+    def __init__(self, base_url: str, secret_key: str, bucket: str = "print-documents",
+                 upload_ttl: int = 900, download_ttl: int = 300, timeout: float = 30.0):
+        self.base = base_url.rstrip("/") + "/storage/v1"
+        self.bucket = bucket
+        self.download_ttl = download_ttl
+        self._http = httpx.Client(headers={"apikey": secret_key, "Authorization": f"Bearer {secret_key}"}, timeout=timeout)
+
+    def _obj(self, key: str) -> str:
+        return f"{self.bucket}/{quote(key, safe='/')}"
+
+    def create_upload(self, key: str, max_bytes: int) -> UploadGrant:
+        r = self._http.post(f"{self.base}/object/upload/sign/{self._obj(key)}")
+        r.raise_for_status()
+        return UploadGrant(url=self.base + r.json()["url"].removeprefix("/storage/v1"),
+                           headers={"Content-Type": "application/pdf"})
+
+    def read(self, key: str, max_bytes: int) -> Optional[bytes]:
+        with self._http.stream("GET", f"{self.base}/object/{self._obj(key)}") as r:
+            if r.status_code in (400, 404):
+                return None
+            r.raise_for_status()
+            data = bytearray()
+            for chunk in r.iter_bytes():
+                data += chunk
+                if len(data) > max_bytes:       # never buffer more than a little past the declared size
+                    break
+            return bytes(data[: max_bytes + 1])
+
+    def create_download_url(self, key: str) -> str:
+        r = self._http.post(f"{self.base}/object/sign/{self._obj(key)}", json={"expiresIn": self.download_ttl})
+        r.raise_for_status()
+        return self.base + r.json()["signedURL"].removeprefix("/storage/v1")
+
+    def delete(self, key: str) -> None:
+        r = self._http.request("DELETE", f"{self.base}/object/{self.bucket}", json={"prefixes": [key]})
+        if r.status_code not in (200, 404):
+            r.raise_for_status()

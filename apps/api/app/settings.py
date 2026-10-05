@@ -17,6 +17,11 @@ class Settings:
     local_storage_dir: str = ".localstorage"
     public_base_url: str = "http://127.0.0.1:8000"  # used to build signed upload URLs for local storage
     signing_key: str = field(default="", repr=False)
+    supabase_url: str = ""
+    supabase_secret_key: str = field(default="", repr=False)
+    storage_bucket: str = "print-documents"
+    maintenance_token: str = field(default="", repr=False)
+    background_maintenance: bool = True           # False on serverless hosts, where a scheduler calls /v1/internal/maintenance
     max_upload_bytes: int = 26_214_400              # 25 MiB
     upload_url_ttl_seconds: int = 900
     download_url_ttl_seconds: int = 300
@@ -30,6 +35,8 @@ class Settings:
             raise ConfigError("AUTOPRINT_V4_DATABASE_URL must be a PostgreSQL URL")
         if self.storage_backend not in {"local", "supabase"}:
             raise ConfigError("AUTOPRINT_V4_STORAGE_BACKEND must be 'local' or 'supabase'")
+        if self.storage_backend == "supabase" and not (self.supabase_url.startswith("https://") and self.supabase_secret_key):
+            raise ConfigError("AUTOPRINT_V4_SUPABASE_URL (https) and AUTOPRINT_V4_SUPABASE_SECRET_KEY are required for supabase storage")
         if self.storage_backend == "local" and len(self.signing_key) < 32:
             raise ConfigError("AUTOPRINT_V4_SIGNING_KEY must be at least 32 characters for local storage")
         if self.environment == "production":
@@ -55,6 +62,11 @@ def load_settings(env: dict | None = None) -> Settings:
         local_storage_dir=e.get("AUTOPRINT_V4_LOCAL_STORAGE_DIR", ".localstorage"),
         public_base_url=e.get("AUTOPRINT_V4_PUBLIC_BASE_URL", "http://127.0.0.1:8000").rstrip("/"),
         signing_key=e.get("AUTOPRINT_V4_SIGNING_KEY", ""),
+        supabase_url=e.get("AUTOPRINT_V4_SUPABASE_URL", ""),
+        supabase_secret_key=e.get("AUTOPRINT_V4_SUPABASE_SECRET_KEY", ""),
+        storage_bucket=e.get("AUTOPRINT_V4_STORAGE_BUCKET", "print-documents"),
+        maintenance_token=e.get("AUTOPRINT_V4_MAINTENANCE_TOKEN", ""),
+        background_maintenance=e.get("AUTOPRINT_V4_BACKGROUND_MAINTENANCE", "true").strip().lower() in {"1", "true", "yes"},
         environment=e.get("AUTOPRINT_V4_ENVIRONMENT", "development"),
         allowed_origins=_origins(e.get("AUTOPRINT_V4_ALLOWED_ORIGINS", "")),
     ).validate()

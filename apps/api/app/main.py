@@ -28,7 +28,7 @@ from app.errors import CATALOG, SQL_RESULT_MAP, SQL_SUCCESS
 from app.pdf_validation import PdfRejected, validate_pdf
 from app.pricing import PricingError, price_job, validate_rules
 from app.settings import Settings, load_settings
-from app.storage import LocalStorage, Storage
+from app.storage import LocalStorage, Storage, SupabaseStorage
 from app.wording import CUSTOMER_MESSAGE
 
 API_VERSION = "0.2.0"
@@ -63,7 +63,8 @@ def make_storage(settings: Settings) -> Storage:
     if settings.storage_backend == "local":
         return LocalStorage(settings.local_storage_dir, settings.public_base_url, settings.signing_key,
                             settings.upload_url_ttl_seconds, settings.download_url_ttl_seconds)
-    raise RuntimeError("Supabase storage is wired in the Phase 3 deployment step")
+    return SupabaseStorage(settings.supabase_url, settings.supabase_secret_key, settings.storage_bucket,
+                           settings.upload_url_ttl_seconds, settings.download_url_ttl_seconds)
 
 
 def run_maintenance_once(db: Database, storage: Storage) -> dict:
@@ -91,7 +92,7 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         thread = None
-        if not contract_only:
+        if not contract_only and settings.background_maintenance:
             def loop():
                 while not stop.wait(settings.maintenance_interval_seconds):
                     try:
@@ -358,6 +359,15 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
             if data is None:
                 raise ApiException("document_not_found")
             return Response(content=data, media_type="application/pdf")
+
+    @app.post("/v1/internal/maintenance", include_in_schema=False)
+    def maintenance(x_maintenance_token: str = Header("")):
+        """Called by a scheduler (free GitHub Actions cron) on hosts with no background thread."""
+        import hmac
+        if not settings.maintenance_token or not hmac.compare_digest(
+                sha256_hex(x_maintenance_token), sha256_hex(settings.maintenance_token)):
+            raise ApiException("unauthorized")
+        return run_maintenance_once(db, storage)
 
     @app.get("/health", tags=["platform"], operation_id="health")
     def health():

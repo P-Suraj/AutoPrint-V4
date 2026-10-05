@@ -12,7 +12,7 @@ F-1 isolated project and repo · F-2 first success target · F-3 web-only custom
 | ID | Subject | Status |
 |---|---|---|
 | D-1 | Monorepo layout | PROPOSED |
-| D-2 | API: Python + FastAPI, always-on host, pooled direct PostgreSQL | PROPOSED |
+| D-2 | API: Python + FastAPI on Vercel serverless (project autoprint-v4, region bom1), Supabase pooler for SQL | REVISED 2026-10-05 (see O-4). Not yet deployed or measured |
 | D-3 | New Supabase project in Mumbai, database and storage only | PROPOSED |
 | D-4 | Web: React + Vite + TypeScript on new Vercel project | PROPOSED |
 | D-5 | Desktop: C# .NET WPF | APPROVED 2026-10-05 (via O-3) |
@@ -20,7 +20,7 @@ F-1 isolated project and repo · F-2 first success target · F-3 web-only custom
 | D-7 | Business rules in SQL transactions | PROPOSED |
 | D-8 | Upload once, validate once | PROPOSED |
 | D-9 | Previews rendered client-side | PROPOSED |
-| D-10 | WebSocket signal plus HTTPS calls plus slow safety poll | PROPOSED |
+| D-10 | Desktop app reaches the API by HTTPS polling about every 10 s (heartbeat and job list in one call); no WebSocket | REVISED 2026-10-05: serverless cannot hold a socket. Supabase Realtime is a later option, unverified |
 | D-11 | No cookies; order secret in header | PROPOSED |
 | D-12 | One-time enrolment code, DPAPI secret, no shopkeeper PIN for first shop | APPROVED 2026-10-05 (via O-6) |
 | D-13 | OpenAPI is the single contract, generated clients | PROPOSED |
@@ -34,13 +34,22 @@ F-1 isolated project and repo · F-2 first success target · F-3 web-only custom
 | O-1 | Submit from anywhere | ANSWERED: yes, shop link works off-site |
 | O-2 | Payments timing | ANSWERED: no online payment before physical certification; pay-at-counter for the pilot; FinFlow after printing is proven (Phase 9) |
 | O-3 | C# codebase | ANSWERED: yes, C# / .NET / WPF |
-| O-4 | Always-on host | OPEN by choice: decide in Phase 3 from current pricing and latency to the V4 Supabase database |
+| O-4 | Always-on host | ANSWERED 2026-10-05: founder has no card, so no always-on host. Use free resources: Vercel (bom1) for the API and web, Supabase for database and storage, GitHub Actions cron for scheduled maintenance. Risks listed in docs/ARCHITECTURE.md |
 | O-5 | Retention | ANSWERED: unconfirmed/abandoned uploads 1 hour; files 24 hours after final state; hard maximum 48 hours from upload |
 | O-6 | Shopkeeper PIN/login | ANSWERED: none for first shop; revisit before the second shop |
 | O-7 | Pilot shop, PC, printers | PENDING: founder will supply shop, Windows PC/version, printer models, connection type, access details before Phase 1. Blocks Phase 1. |
 | O-8 | Success wording | ANSWERED: "Sent to printer". Do not say "Printed" until the Phase 1 spike proves the completion evidence. |
 | O-9 | Multiple PDFs | ANSWERED: no multi-PDF UI for certification; schema supports many documents from day one |
 | O-10 | Unapproved job expiry | ANSWERED: customer can cancel before approval; unapproved jobs expire after a fixed 1-hour window, stored as `expires_at` on the order. No shop closing-time configuration in the MVP. |
+
+## Resources (no secrets here)
+
+| Resource | Value | Verified |
+|---|---|---|
+| Supabase project ref | qgiutwhmqidnkcwbeuls (V4 only; V3 uses a different ref) | HTTPS API reachable and key accepted, 5 Oct 2026 |
+| Supabase storage bucket | print-documents, private, 25 MiB limit, PDF only | Created and tested live 5 Oct 2026 |
+| Supabase SQL port (5432/6543) | Not reachable from the founder's current network (timeouts) | Migrations are applied by pasting supabase/_combined.sql into the SQL Editor |
+| Vercel project | autoprint-v4, connected to P-Suraj/AutoPrint-V4, region bom1 | Not yet deployed; no access from this machine |
 
 ## Still awaiting approval
 
