@@ -1,12 +1,44 @@
-﻿<Window x:Class="AutoPrint.Desktop.MainWindow"
+<Window x:Class="AutoPrint.Desktop.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:local="clr-namespace:AutoPrint.Desktop"
-        mc:Ignorable="d"
-        Title="MainWindow" Height="450" Width="800">
-    <Grid>
+        Title="AutoPrint" Width="860" Height="640" MinWidth="640" MinHeight="480"
+        WindowStartupLocation="CenterScreen" Background="#F4F6FA" FontFamily="Segoe UI" FontSize="14">
+    <Grid Margin="20">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
 
+        <DockPanel Grid.Row="0" Margin="0,0,0,12">
+            <Button x:Name="SettingsButton" DockPanel.Dock="Right" Content="Printers…" Click="OnSettings" Margin="0"/>
+            <StackPanel>
+                <TextBlock x:Name="ShopTitle" FontSize="22" FontWeight="SemiBold" Text="AutoPrint"/>
+                <StackPanel Orientation="Horizontal">
+                    <Ellipse x:Name="StatusDot" Width="10" Height="10" Fill="Gray" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="StatusText" Foreground="#555" Text="Starting…"/>
+                </StackPanel>
+            </StackPanel>
+        </DockPanel>
+
+        <Border x:Name="Banner" Grid.Row="1" Background="#FFF4CE" CornerRadius="6" Padding="12,8" Margin="0,0,0,12" Visibility="Collapsed">
+            <TextBlock x:Name="BannerText" TextWrapping="Wrap"/>
+        </Border>
+
+        <!-- Pairing view -->
+        <Border x:Name="PairView" Grid.Row="2" Background="White" CornerRadius="10" Padding="32" Visibility="Collapsed">
+            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                <TextBlock Text="Connect this PC to your shop" FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                <TextBlock Text="Give this code to AutoPrint. It connects this PC to your shop." Foreground="#555" Margin="0,8,0,16" HorizontalAlignment="Center"/>
+                <TextBlock x:Name="PairCode" FontSize="52" FontWeight="Bold" FontFamily="Consolas" HorizontalAlignment="Center" Text="····-····"/>
+                <TextBlock x:Name="PairNote" Foreground="#777" Margin="0,12,0,16" HorizontalAlignment="Center" Text="Waiting…"/>
+                <Button Content="Get a new code" Click="OnNewCode" HorizontalAlignment="Center" Margin="0"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Queue view -->
+        <Grid x:Name="QueueView" Grid.Row="2" Visibility="Collapsed">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel x:Name="Cards"/>
+            </ScrollViewer>
+            <TextBlock x:Name="EmptyText" Text="No print requests right now.&#10;New ones appear here by themselves." Foreground="#777"
+                       HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" FontSize="16"/>
+        </Grid>
     </Grid>
 </Window>

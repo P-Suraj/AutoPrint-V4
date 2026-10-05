@@ -22,7 +22,7 @@ public sealed class DpapiCredentialStore(string path) : ICredentialStore
     private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("AutoPrint.V4.device-credentials");
 
     public static string DefaultPath() =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AutoPrint", "device.bin");
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AutoPrintV4", "device.bin");
 
     public DeviceCredentials? Load()
     {
