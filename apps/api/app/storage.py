@@ -14,6 +14,7 @@ import hashlib
 import hmac
 import os
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Protocol
@@ -123,7 +124,11 @@ class SupabaseStorage:
                            headers={"Content-Type": "application/pdf"})
 
     def read(self, key: str, max_bytes: int) -> Optional[bytes]:
-        with self._http.stream("GET", f"{self.base}/object/{self._obj(key)}") as r:
+        # Supabase's CDN caches authenticated object reads: a deleted object kept coming back (HTTP 200)
+        # for at least 20 s. A unique query string makes every read miss the cache, so a deleted file is
+        # gone at once. Measured against the live V4 project on 5 Oct 2026; covered by the live test.
+        nonce = uuid.uuid4().hex
+        with self._http.stream("GET", f"{self.base}/object/{self._obj(key)}?_={nonce}") as r:
             if r.status_code in (400, 404):
                 return None
             r.raise_for_status()

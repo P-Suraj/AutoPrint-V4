@@ -65,6 +65,18 @@
 - Live timings from the founder's network, warm: /health 70 ms, shop lookup 115 ms, shop poll 94 ms, static page 50 ms. Cold starts and a full successful poll under load are NOT measured.
 - Still no desktop app: nothing prints. The demo SQL files stand in for the shopkeeper.
 
+## Privacy finding: deleted files stayed readable (5 Oct 2026)
+
+Supabase's CDN caches authenticated object reads. After `delete`, an authenticated read of the same URL still returned the file (HTTP 200, cache HIT) for at least 20 seconds. Measured on the live V4 project.
+
+- NOT a leak to outsiders: unauthenticated and wrong-key requests got 400 and never received the cached file, and signed-URL reads are never cached.
+- It did break "purged means gone" for the server's own reads. Fixed: every server-side read adds a unique query string, which misses the cache (400 immediately after delete). The live regression test (read, delete, read) now passes 3 of 3 runs.
+- Not measured: how long the CDN keeps the orphaned cached bytes. They can only be fetched with the exact URL plus a valid key, and no code path asks for that URL again.
+
+## Credential rotation (5 Oct 2026)
+
+Supabase credentials were rotated by the founder. Old key rejected (HTTP 400). New values live in the git-ignored `.env` and the V4 Vercel project. Vercel only applies environment changes to NEW deployments, so a redeploy is required after every change (I forgot once; the live site reported `database: failed` until redeployed). After redeploy: `/health/ready` OK, and a full live customer flow (create, upload, finalize, quote, submit, status, cancel) succeeded.
+
 ## Findings so far
 
 - V3's bundled `SumatraPDF.exe` is the installer, not the portable program (identical hash). V3 could never have reliably printed through it.
