@@ -1,0 +1,43 @@
+# Secrets and environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Node
+node_modules/
+dist/
+
+# .NET
+bin/
+obj/
+*.user
+.vs/
+
+# Build output and installers
+build/
+out/
+*.exe
+*.msi
+
+# Logs and local data
+*.log
+*.db
+*.db-shm
+*.db-wal
+
+# IDE and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
