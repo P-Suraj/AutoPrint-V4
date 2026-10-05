@@ -28,7 +28,7 @@ F-1 isolated project and repo · F-2 first success target · F-3 web-only custom
 | D-15 | Schema supports many documents per order; MVP screen allows one PDF | APPROVED 2026-10-05 (via O-9) |
 | D-16 | A4 only, B&W and colour printer slots | PROPOSED |
 | D-17 | Founder operations as scripts | PROPOSED |
-| D-18 | Deploy a skeleton in Phase 3 | PROPOSED |
+| D-18 | Deploy a skeleton in Phase 3 | APPROVED 2026-10-05 |
 | O-1 | Submit from anywhere | ANSWERED: yes, shop link works off-site |
 | O-2 | Payments timing | ANSWERED: no online payment before physical certification; pay-at-counter for the pilot; FinFlow after printing is proven (Phase 9) |
 | O-3 | C# codebase | ANSWERED: yes, C# / .NET / WPF |
@@ -38,8 +38,8 @@ F-1 isolated project and repo · F-2 first success target · F-3 web-only custom
 | O-7 | Pilot shop, PC, printers | PENDING: founder will supply shop, Windows PC/version, printer models, connection type, access details before Phase 1. Blocks Phase 1. |
 | O-8 | Success wording | ANSWERED: "Sent to printer". Do not say "Printed" until the Phase 1 spike proves the completion evidence. |
 | O-9 | Multiple PDFs | ANSWERED: no multi-PDF UI for certification; schema supports many documents from day one |
-| O-10 | Unapproved job expiry | PARTLY ANSWERED: customer can cancel before approval; unapproved jobs expire at shop closing or after a fixed window. STILL NEEDED: the window length and how a shop's closing time is stored. Decide in Phase 2. |
+| O-10 | Unapproved job expiry | ANSWERED: customer can cancel before approval; unapproved jobs expire after a fixed 1-hour window, stored as `expires_at` on the order. No shop closing-time configuration in the MVP. |
 
 ## Still awaiting approval
 
-D-1, D-2, D-3, D-4, D-6, D-7, D-8, D-9, D-10, D-11, D-13, D-14, D-16, D-17, D-18 remain PROPOSED. Most are technical choices that Phases 1-3 will test; D-18 (early skeleton deployment) changes the founder's original phase order and needs an explicit yes.
+D-1, D-2, D-3, D-4, D-6, D-7, D-8, D-9, D-10, D-11, D-13, D-14, D-16, D-17 remain PROPOSED. Most are technical choices that Phases 1-3 will test.
