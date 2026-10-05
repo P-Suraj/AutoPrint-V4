@@ -1,0 +1,11 @@
+.env
+.env.*
+.localdb
+spikes
+node_modules
+**/node_modules
+**/.venv
+**/__pycache__
+apps/web/dist
+test-results
+playwright-report
