@@ -256,3 +256,12 @@ Could not assess: Supabase dashboard settings (bucket privacy and limits, Auth),
 - "Print a test page" tested only the black-and-white printer (`SettingsWindow.xaml.cs:69`).
 - **Cause of the founder's failed job BLS3 (6 Oct, 17:57):** the app's chosen printer was "Microsoft Print to PDF", which opens a Save As window and waits; the job ended `engine_failed_nothing_in_spooler` after 87 s. Every job through the installed app on the founder PC so far went to that virtual printer, so the completion rule is still unconfirmed on a physical printer through this app.
 - The permission system of the Claude Code session refused three actions on 6 Oct: applying migrations through `/v1/internal/migrate`, running `e2e/run_live_e2e.py`, and starting a payments agent on a separate branch. The founder runs the first two himself.
+
+## Payments design (6 October 2026, design only, nothing built)
+
+`docs/PAYMENTS_DESIGN.md` was written from a read of FinFlow's source (`F:\Projects\finflow`, read, not run). Headline findings:
+- **FinFlow cannot take a customer payment today.** Creating a payment intent only writes a row; it creates no provider order and returns no checkout link.
+- **FinFlow is built for the opposite of decision P-1:** one platform Razorpay account, a 10% fee, a ledger split and later payouts to shops. There is no per-shop provider account or onboarding.
+- **AutoPrint has the payment record (`ap.payments`) but no eligibility check:** `approve_job` and `claim_next_job` never read the payment, although BUILD_PHASES says the check exists.
+- FinFlow's outbound signed event differs from its own document and gives up after 5 tries in about 7.5 minutes; intents never expire. Not deployed, not sandbox-verified. No host was found that is free, needs no card and is always on; the nearest is a UPI-paid server at a reported Rs 360 to 400 a month (unverified).
+- The AutoPrint side (13 steps, default OFF per shop) can be built and tested now against a fake FinFlow. The real integration is blocked on FinFlow changes and on 14 founder questions listed in the design, each with a recommendation.
