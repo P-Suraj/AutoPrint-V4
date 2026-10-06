@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse
 
 from app import schemas as s
 from app.db import Database, sha256_hex
+from app.email_auth import EmailAuth, EmailAuthError, make_email_auth
 from app.errors import CATALOG, SQL_RESULT_MAP, SQL_SUCCESS
 from app.pdf_validation import PdfRejected, validate_pdf
 from app.pricing import PricingError, price_job, validate_rules
@@ -82,7 +83,7 @@ def delete_due_documents(db: Database, storage: Storage, limit: int = 100) -> in
     return deleted
 
 
-def create_app(settings: Optional[Settings] = None, *, contract_only: bool = False) -> FastAPI:
+def create_app(settings: Optional[Settings] = None, *, contract_only: bool = False, email_auth: Optional[EmailAuth] = None) -> FastAPI:
     """contract_only builds the routes without a database; used to export contracts/openapi.json."""
     db: Optional[Database] = None
     storage: Optional[Storage] = None
@@ -92,6 +93,7 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
         settings = settings or load_settings()
         db = Database(settings.database_url)
         storage = make_storage(settings)
+        email_auth = email_auth or make_email_auth(settings.supabase_url, settings.supabase_publishable_key)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -206,7 +208,8 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
                                      expires_at=res["expires_at"], access_until=res["access_until"])
 
     @customer.post("/orders/{order_id}/documents", response_model=s.RegisterDocumentResponse, status_code=201, operation_id="registerDocument")
-    def register_document(order_id: UUID, body: s.RegisterDocumentRequest, x_order_secret: str = Header(...)):
+    def register_document(order_id: UUID, body: s.RegisterDocumentRequest, request: Request, x_order_secret: str = Header(...)):
+        limit(request, "upload", 150, 600)
         authorize_order(order_id, x_order_secret)
         if body.byte_size > settings.max_upload_bytes:
             raise ApiException("file_too_large")
@@ -247,7 +250,8 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
         return s.FinalizeDocumentResponse(document_id=document_id, page_count=res["page_count"], sha256=res["sha256"])
 
     @customer.post("/orders/{order_id}/quote", response_model=s.QuoteResponse, status_code=201, operation_id="createQuote")
-    def create_quote(order_id: UUID, body: s.CreateQuoteRequest, x_order_secret: str = Header(...)):
+    def create_quote(order_id: UUID, body: s.CreateQuoteRequest, request: Request, x_order_secret: str = Header(...)):
+        limit(request, "quote", 300, 600)
         authorize_order(order_id, x_order_secret)
         rate = db.one("SELECT r.id, r.version, r.rules FROM ap.rate_cards r JOIN ap.orders o ON o.shop_id = r.shop_id "
                       "WHERE o.id = %s AND r.retired_at IS NULL", (order_id,))
@@ -401,6 +405,37 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
     # The key is the credential of one shop login (method "link" today; phone/email later map to the same key check).
     shop = APIRouter(prefix="/v1/shop", tags=["shop-owner"], responses=ERR)
 
+    @shop.post("/email/start", response_model=s.EmailStartResponse, status_code=202, operation_id="shopEmailStart")
+    def shop_email_start(body: s.EmailStartRequest, request: Request):
+        """Emails a sign-in link, but only to an address the founder registered. The answer is the same either way, so
+        nobody can use this to find out which addresses are registered."""
+        email = body.email.strip().lower()
+        h = sha256_hex(email)
+        limit(request, "email-start", 5, 600)
+        limit(request, "email-start-address", 3, 3600, scope=h, by_address=False)
+        if db.call_scalar("shop_email_known", h):
+            try:
+                email_auth.send_link(email, f"{settings.web_base_url}/shop")
+            except EmailAuthError:
+                log.warning("sign-in email could not be sent")
+                raise ApiException("try_again") from None
+        return s.EmailStartResponse(status="sent_if_registered")
+
+    @shop.post("/email/finish", response_model=s.ShopSignedIn, operation_id="shopEmailFinish")
+    def shop_email_finish(body: s.EmailFinishRequest, request: Request):
+        """The shopkeeper came back from the email link with a provider token. If it proves a registered address, they get
+        a normal shop key (stored only as a hash)."""
+        limit(request, "email-finish", 20, 600)
+        try:
+            email = email_auth.verified_email(body.access_token)
+        except EmailAuthError:
+            raise ApiException("try_again") from None
+        if not email:
+            raise ApiException("unauthorized")
+        key = secrets.token_hex(32)
+        res = check(db.call("shop_email_login", sha256_hex(email.strip().lower()), sha256_hex(key)))
+        return s.ShopSignedIn(key=key, shop_code=res["shop_code"], shop_name=res["shop_name"])
+
     @shop.get("/me", response_model=s.ShopMe, operation_id="shopMe")
     def shop_me(x_shop_key: str = Header(...)):
         res = check(db.call("shop_login_resolve", sha256_hex(x_shop_key)))
@@ -508,6 +543,28 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
             return {"code": code, "created": created, "rate_card_version": version}
 
         return db.transaction(work)
+
+    @app.post("/v1/internal/shop-email", include_in_schema=False)
+    def register_shop_email(body: dict, x_maintenance_token: str = Header("")):
+        """Founder tool: allow (or stop allowing) an email address to sign in to a shop dashboard."""
+        require_maintenance_token(x_maintenance_token)
+        email = str(body.get("email", "")).strip().lower()
+        if "@" not in email or len(email) > 254:
+            raise ApiException("invalid_items")
+        h = sha256_hex(email)
+        if body.get("remove"):
+            check(db.call("shop_email_remove", h))
+            return {"removed": True}
+        check(db.call("shop_email_add", str(body.get("shop_code", "")), h, str(body.get("label", "owner"))[:80]))
+        return {"registered": True}
+
+    @app.get("/v1/internal/whoami", include_in_schema=False)
+    def whoami(request: Request, x_maintenance_token: str = Header("")):
+        """Shows which caller address headers the app sees, so the rate limiter can be checked behind the host."""
+        require_maintenance_token(x_maintenance_token)
+        h = request.headers
+        return {"x_forwarded_for": h.get("x-forwarded-for"), "x_real_ip": h.get("x-real-ip"), "x_vercel_forwarded_for": h.get("x-vercel-forwarded-for"),
+                "client_host": request.client.host if request.client else None}
 
     @app.post("/v1/internal/purge", include_in_schema=False)
     def purge_order(body: dict, x_maintenance_token: str = Header("")):

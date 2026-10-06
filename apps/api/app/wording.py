@@ -9,7 +9,7 @@ CUSTOMER_MESSAGE: dict[JobStatus, str] = {
     JobStatus.awaiting_approval: "Waiting for the shop to approve your print.",
     JobStatus.approved: "Approved. Waiting for the printer.",
     JobStatus.printing: "Sending to the printer.",
-    JobStatus.completed: "Sent to printer.",
+    JobStatus.completed: "Sent to printer. Collect it at the counter.",
     JobStatus.failed: "The shop could not print this. Please ask at the counter.",
     JobStatus.needs_attention: "The shop is checking this print. Please ask at the counter.",
     JobStatus.rejected: "The shop declined this print.",

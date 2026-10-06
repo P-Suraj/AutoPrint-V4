@@ -140,7 +140,7 @@ def test_full_shop_flow_to_sent_to_printer(agent, flow, client):
     r = agent.post(f"/attempts/{aid}/outcome", json={"attempt_token": tok, "outcome": "completed", "evidence": GOOD})
     assert r.status_code == 200 and r.json() == {"job_status": "completed"}
     v2 = flow.view().json()
-    assert v2["status"] == "closed" and v2["jobs"][0]["customer_message"] == "Sent to printer."
+    assert v2["status"] == "closed" and v2["jobs"][0]["customer_message"] == "Sent to printer. Collect it at the counter."
 
 
 def test_completed_without_evidence_is_refused(agent, flow):

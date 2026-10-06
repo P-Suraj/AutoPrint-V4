@@ -84,3 +84,9 @@ export const shopApi = {
     call(() => client.POST("/v1/shop/devices/{device_id}/revoke", { params: { path: { device_id: id }, header: { "x-shop-key": key } } })),
 };
 export { shopKey };
+
+// ---- sign-in by email (no key needed: these two calls are how a shopkeeper gets one)
+export const shopAuth = {
+  emailStart: (email: string) => call(() => client.POST("/v1/shop/email/start", { body: { email } })),
+  emailFinish: (accessToken: string) => call(() => client.POST("/v1/shop/email/finish", { body: { access_token: accessToken } })),
+};

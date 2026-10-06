@@ -219,6 +219,24 @@ class PairPollResponse(Strict):
     shop_name: Optional[str] = None
 
 
+class EmailStartRequest(Strict):
+    email: str = Field(min_length=5, max_length=254, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+class EmailStartResponse(Strict):
+    status: str = Field(pattern="^sent_if_registered$")
+
+
+class EmailFinishRequest(Strict):
+    access_token: str = Field(min_length=20, max_length=4096)
+
+
+class ShopSignedIn(Strict):
+    key: str
+    shop_code: str
+    shop_name: str
+
+
 class ShopMe(Strict):
     shop_code: str
     shop_name: str

@@ -6,6 +6,8 @@ Reads AUTOPRINT_V4_MAINTENANCE_TOKEN from .env. Nothing here prints a secret exc
   PY scripts/ap_remote.py shop-link ABC123 --label owner                      private dashboard link for the shopkeeper
   PY scripts/ap_remote.py revoke-link --label owner                           revoke every login with that label
   PY scripts/ap_remote.py purge ABC123 K7QD                                   delete the files of one finished order now (customer request)
+  PY scripts/ap_remote.py add-email ABC123 owner@example.com --label owner   allow this email to sign in to the shop dashboard
+  PY scripts/ap_remote.py remove-email owner@example.com                       stop allowing it
   PY scripts/ap_remote.py report ABC123 [--hours 24]                          counts, outcomes, computer online?   (see ap_report.py)
 """
 import argparse
@@ -34,6 +36,8 @@ def main() -> int:
     a = sub.add_parser("set-rates"); a.add_argument("code"); a.add_argument("--rates", required=True)
     a = sub.add_parser("shop-link"); a.add_argument("code"); a.add_argument("--label", default="owner")
     a = sub.add_parser("purge"); a.add_argument("code"); a.add_argument("order", help="the 4-character order code the customer sees")
+    a = sub.add_parser("add-email"); a.add_argument("code"); a.add_argument("email"); a.add_argument("--label", default="owner")
+    a = sub.add_parser("remove-email"); a.add_argument("email")
     a = sub.add_parser("revoke-link"); a.add_argument("--label", required=True)
     args = p.parse_args()
 
@@ -51,6 +55,12 @@ def main() -> int:
     elif args.cmd == "purge":
         r = post("/v1/internal/purge", {"shop_code": args.code, "order": args.order})
         print(f"orders matched {r['orders_matched']}, files deleted now {r['documents_deleted_now']}, files remaining {r['documents_remaining']}")
+    elif args.cmd == "add-email":
+        post("/v1/internal/shop-email", {"shop_code": args.code, "email": args.email, "label": args.label})
+        print(f"{args.email} can now sign in to the dashboard of shop {args.code.upper()} at {BASE}/shop")
+    elif args.cmd == "remove-email":
+        post("/v1/internal/shop-email", {"email": args.email, "remove": True})
+        print("removed")
     elif args.cmd == "revoke-link":
         print(post("/v1/internal/shop-login", {"revoke_label": args.label}))
     return 0

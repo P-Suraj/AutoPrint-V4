@@ -296,7 +296,7 @@ def test_customer_text_after_completion_never_says_printed(flow, shop, raw_db):
           "flags_seen": ["PRINTING"], "max_pages_printed": 1}
     assert raw_db.call("report_outcome", c["attempt_id"], c["attempt_token"], device, "completed", ev)["result"] == "ok"
     v = flow.view().json()
-    assert v["status"] == "closed" and v["jobs"][0]["customer_message"] == "Sent to printer."
+    assert v["status"] == "closed" and v["jobs"][0]["customer_message"] == "Sent to printer. Collect it at the counter."
     assert "printed" not in v["jobs"][0]["customer_message"].lower()
 
 

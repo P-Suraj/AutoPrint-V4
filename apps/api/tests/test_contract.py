@@ -66,7 +66,7 @@ def test_customer_wording_never_claims_printed():
     # O-8: until the Phase 1 spike proves completion evidence, no customer text says "printed".
     from app.wording import CUSTOMER_MESSAGE
     assert set(CUSTOMER_MESSAGE) == set(schemas.JobStatus), "every job status needs customer wording"
-    assert CUSTOMER_MESSAGE[schemas.JobStatus.completed] == "Sent to printer."
+    assert CUSTOMER_MESSAGE[schemas.JobStatus.completed] == "Sent to printer. Collect it at the counter."
     for status, text in CUSTOMER_MESSAGE.items():
         assert not re.search(r"printed", text, re.I), f"{status}: {text}"
 

@@ -42,7 +42,8 @@ A customer sends a PDF from a phone (no account); the shopkeeper approves it in 
 2. **Founder test** following `docs/TEST_THE_WINDOWS_APP.md`; collect wording, speed and warning-text feedback.
 3. **Physical certification (Phases 1, 6, 8)** when at the shop: 30 to 50 real prints, duplex and colour, every failure drill, record which flags the real driver raises, re-validate or change the completion rule. This gates any "Printed" wording and any payments.
 4. Phase 7 leftovers: timed clean-PC install, reboot test, 24-hour soak, retention proven live, purge-on-request script, counter poster generator.
-5. Customer side: rate limit, add-to-home-screen, optional wording "Sent to printer. Collect it at the counter."
+5. Customer side: done (rate limits, installable site, wording "Sent to printer. Collect it at the counter."). Still to check: run `GET /v1/internal/whoami` to confirm real addresses reach the limiter.
+5b. Switch on email sign-in for shopkeepers (steps in IMPLEMENTATION_STATUS.md, section "Items 3 and 4 work"); it is built but needs the Supabase dashboard settings and the publishable key.
 6. Code signing route decision (`docs/DESKTOP_DISTRIBUTION.md`): unsigned for the first pilot shops; report each build to Microsoft; buy a certificate when shops install without the founder.
 7. Phase 9 payments via FinFlow (not started; blocked on physical certification and the founder's O-2 decision: no payments before certification). Phase 10 validation.
 8. Business questions kept in the background (not yet answered): adoption baseline (time about 20 real WhatsApp or email jobs at the pilot shop), ads versus fees, why competitors are not everywhere, distribution.

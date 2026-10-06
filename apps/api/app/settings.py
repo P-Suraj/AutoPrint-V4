@@ -19,6 +19,8 @@ class Settings:
     signing_key: str = field(default="", repr=False)
     supabase_url: str = ""
     supabase_secret_key: str = field(default="", repr=False)
+    supabase_publishable_key: str = ""             # public by design; used for email sign-in (Supabase Auth)
+    web_base_url: str = "https://autoprint-v4.vercel.app"   # where the sign-in email sends the shopkeeper back to
     storage_bucket: str = "print-documents"
     maintenance_token: str = field(default="", repr=False)
     background_maintenance: bool = True           # False on serverless hosts, where a scheduler calls /v1/internal/maintenance
@@ -64,6 +66,8 @@ def load_settings(env: dict | None = None) -> Settings:
         signing_key=e.get("AUTOPRINT_V4_SIGNING_KEY", ""),
         supabase_url=e.get("AUTOPRINT_V4_SUPABASE_URL", ""),
         supabase_secret_key=e.get("AUTOPRINT_V4_SUPABASE_SECRET_KEY", ""),
+        supabase_publishable_key=e.get("AUTOPRINT_V4_SUPABASE_PUBLISHABLE_KEY", ""),
+        web_base_url=e.get("AUTOPRINT_V4_WEB_BASE_URL", "https://autoprint-v4.vercel.app").rstrip("/"),
         storage_bucket=e.get("AUTOPRINT_V4_STORAGE_BUCKET", "print-documents"),
         maintenance_token=e.get("AUTOPRINT_V4_MAINTENANCE_TOKEN", ""),
         background_maintenance=e.get("AUTOPRINT_V4_BACKGROUND_MAINTENANCE", "true").strip().lower() in {"1", "true", "yes"},

@@ -2,7 +2,7 @@
 // The key is read once from the link fragment (which browsers never send to a server), kept in this browser, and
 // removed from the address bar. Later sign-in methods (phone, email) will end by giving this page the same kind of key.
 import { useCallback, useEffect, useState } from "react";
-import { ApiError, shopApi, type Schemas } from "../api";
+import { ApiError, shopApi, shopAuth, type Schemas } from "../api";
 
 const KEY = "ap_shop_key";
 
@@ -22,8 +22,54 @@ function readKey(): string | null {
 
 const msg = (e: unknown) => (e instanceof ApiError ? e.message : "Something went wrong. Please try again.");
 
+// Signing in by email: the founder registers the address; the shopkeeper asks for a link, opens it, and comes back here
+// with a provider token in the address fragment. The server checks that token and returns an ordinary shop key.
+function SignIn({ onKey }: { onKey: (key: string) => void }) {
+  const [email, setEmail] = useState("");
+  const [state, setState] = useState<"idle" | "sending" | "sent" | "checking">(() => (/[#&]access_token=/.test(window.location.hash) ? "checking" : "idle"));
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const m = /[#&]access_token=([^&]+)/.exec(window.location.hash);
+    if (!m) return;
+    history.replaceState(null, "", window.location.pathname);          // never leave the token in the address bar
+    shopAuth.emailFinish(decodeURIComponent(m[1]))
+      .then((r) => {
+        try { localStorage.setItem(KEY, r.key); } catch { /* private mode: works until the tab closes */ }
+        onKey(r.key);
+      })
+      .catch((e) => { setState("idle"); setError(e instanceof ApiError && e.code === "unauthorized" ? "That email is not registered for a shop, or the link expired. Ask AutoPrint to add your email." : msg(e)); });
+  }, [onKey]);
+
+  async function send() {
+    setError(null); setState("sending");
+    try { await shopAuth.emailStart(email.trim()); setState("sent"); } catch (e) { setError(msg(e)); setState("idle"); }
+  }
+
+  return (
+    <main>
+      <h1>AutoPrint for shops</h1>
+      {state === "checking" ? <p>Signing you in…</p> : state === "sent" ? (
+        <p role="status">If that email is registered for a shop, a sign-in link is on its way. Open it on this phone or computer. It can take a minute.</p>
+      ) : (
+        <>
+          <p>Sign in with the email address AutoPrint has for your shop, or open the private link you were given.</p>
+          <input type="text" inputMode="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
+          <button className="primary" disabled={state === "sending" || !email.includes("@")} onClick={send}>Email me a sign-in link</button>
+        </>
+      )}
+      {error && <p role="alert" className="error">{error}</p>}
+    </main>
+  );
+}
+
 export default function ShopDashboard() {
-  const [key] = useState(readKey);
+  const [key, setKey] = useState(readKey);
+  if (!key) return <SignIn onKey={setKey} />;
+  return <Dashboard shopKey={key} onSignOut={() => { try { localStorage.removeItem(KEY); } catch { /* nothing to do */ } setKey(null); }} />;
+}
+
+function Dashboard({ shopKey: key, onSignOut }: { shopKey: string; onSignOut: () => void }) {
   const [me, setMe] = useState<Schemas["ShopMe"] | null>(null);
   const [devices, setDevices] = useState<Schemas["ShopDevice"][]>([]);
   const [code, setCode] = useState("");
@@ -42,8 +88,6 @@ export default function ShopDashboard() {
     }
   }, [key]);
   useEffect(() => { void refresh(); }, [refresh]);
-
-  if (!key) return <main><h1>AutoPrint for shops</h1><p>Open the private link you were given.</p></main>;
 
   const clean = code.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
   async function look() {
@@ -83,6 +127,7 @@ export default function ShopDashboard() {
       {note && <p role="status">{note}</p>}
       {error && <p role="alert">{error}</p>}
 
+      <p><button className="link" onClick={onSignOut}>Sign out on this browser</button></p>
       <h2>Your computers</h2>
       {devices.length === 0 ? <p>None connected yet.</p> : (
         <ul>
