@@ -3,7 +3,7 @@
 Use a test shop (`TST001`). Nothing here touches V3. Allow about 15 minutes.
 
 ## What you need
-- `dist\AutoPrintSetup-4.0.0.exe` (59 MB). Rebuild with `powershell -ExecutionPolicy Bypass -File apps\desktop\installer\build.ps1`.
+- `dist\AutoPrintSetup-4.0.1.exe` (59 MB). Rebuild with `powershell -ExecutionPolicy Bypass -File apps\desktop\installer\build.ps1`.
 - `dist\SHOP_LINK.txt`: your private dashboard link for TST001. Keep it private; anyone with it can manage that shop. Revoke it any time through the founder endpoint (label `founder-test`).
 - A printer. The virtual printer `AutoPrint-Spike-PDF` makes a file, not paper. The Kyocera is the real test but is **not certified yet**: use it only for trial pages.
 
@@ -21,6 +21,17 @@ Use a test shop (`TST001`). Nothing here touches V3. Allow about 15 minutes.
 2. Pick a PDF, choose options, submit.
 3. In the app a card appears (and a tray notification). Press **Preview** to see the pages, then **Approve and print**.
 4. The customer page should move to "printing" and then "Sent to printer".
+
+## What is new in 4.0.1
+- Each request shows the order code large (the customer says it at the counter), the amount to collect, sides and sheets, how long it has waited and when it expires.
+- A new request plays a short sound, flashes the taskbar button and shows a tray message. The sound can be switched off in Settings.
+- **Finished** tab: the last 24 hours, with a box to find an order by its code.
+- "Needs attention" explains what to check and what each choice does. "Print again" really prints again and asks you to confirm.
+- Banners when no printer is chosen, the chosen printer is gone or offline, the print program is missing, or the internet is down (requests arrive when it is back).
+- Settings shows the version, the shop, the connection, and a button that opens the folder with `app.log`. To disconnect this PC, use the shop dashboard.
+- Pictures of every screen with made-up data: `AutoPrint.exe --selftest-ui <folder>` (it touches no real data and never prints).
+
+**Not yet tried on a real screen by anyone but you:** the animations, the sound, the taskbar flash, and what happens after the PC sleeps and wakes. Please look at these in particular.
 
 ## 4. Things worth trying
 - Close the window: the app keeps running in the tray (right-click the tray icon, Quit to exit).

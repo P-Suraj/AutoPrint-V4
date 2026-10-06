@@ -4,6 +4,7 @@ For the founder. Everything here was done or checked on 5 October 2026 unless ma
 
 ## 1. Add a shop (about 3 minutes)
 The database port is blocked from the founder PC, so these tools go through the deployed API (`scripts/ap_remote.py`, uses the maintenance token from `.env`).
+0. Prices file: copy `scripts/rates.example.json` to `rates.json` and change every `paise_per_side` (100 paise = 1 rupee). The example holds Rs 999 placeholders that the tool refuses to publish.
 1. Create the shop and its prices in one step: `PY scripts/ap_remote.py create-shop ABC123 "Shop name" --rates rates.json`. Shop codes are three letters and three digits. `rates.json` has the same shape as the demo rate card (`bw` and `color`, each with `simplex` and `duplex` slabs in paise per side). A bad rate card is refused and nothing is created. To change prices later: `set-rates ABC123 --rates rates.json` (publishes a new version; old orders keep the price they were quoted).
 2. Create the shopkeeper link: `PY scripts/ap_remote.py shop-link ABC123 --label owner`. It prints a private link once; hand it over in person.
 3. The customer link is `https://autoprint-v4.vercel.app/s/ABC123`. Print the counter QR for it. The shopkeeper can print the counter sign from their dashboard ("Print your counter sign"), or open `https://autoprint-v4.vercel.app/poster/ABC123`. **Not yet checked:** scanning the printed sign with a real phone.
@@ -17,7 +18,7 @@ The database port is blocked from the founder PC, so these tools go through the 
 5. Send one real job from a phone and approve it. Done.
 
 ## 3. Daily check (30 seconds)
-`PY scripts/ap_report.py ABC123` shows the last 24 hours: counts by outcome, jobs that need a look, whether the shop computer is online.
+`PY scripts/ap_report.py --all` shows every shop on one line each (on or off, computer online, jobs today, needing a look). `PY scripts/ap_report.py ABC123` shows one shop for the last 24 hours (`--days 7` for a week, up to 90): outcomes, success and needs-attention rates, duplicate signs, how long each step took, busiest hours, whether the shop computer is online. It is read-only and shows no document names. Checked live on TST001 on 6 Oct 2026. Time a computer spent offline is recorded only after migration 0011 is applied.
 - `needs_attention` or `failed` above zero: phone the shop. The shopkeeper chooses "It printed", "It did not print" or "Print again" in the app.
 - Computer not online: see the table below.
 
@@ -27,7 +28,9 @@ The database port is blocked from the founder PC, so these tools go through the 
 | Report shows computer last seen long ago | PC off, asleep, or no internet | Ask the shopkeeper to wake the PC and check the status dot in the tray app (green online, orange offline). It reconnects by itself |
 | App shows a new pairing code instead of the queue | Credentials were removed or the computer was disconnected on the dashboard | Shopkeeper types the new code on their dashboard |
 | Customer sees "The shop's printer computer looks offline" | App has been offline for 45+ seconds (the customer can still send; the job waits) | As above |
-| Customer sees "This shop is not taking orders right now" | The shop is switched off in the database (`is_active` false) | Founder switches it back on |
+| Customer sees "This shop is not taking orders right now" | The shop is switched off | `PY scripts/ap_remote.py shop-on ABC123` (and `shop-off ABC123` to stop taking orders; nothing is deleted, jobs already sent still print, and the shopkeeper's dashboard link stops working while it is off). **Not yet run live** |
+| Shop name or prices are wrong | | `rename ABC123 "New name"`; `prices ABC123` shows the current prices; `set-rates` publishes new ones. **Not yet run live** |
+| A request answers "try again" (503) | The database or file storage had a hiccup | It is safe to retry; the apps do. If it lasts, check `https://autoprint-v4.vercel.app/health/ready` |
 | Job stuck as `needs_attention` | The app could not confirm the print (queue stuck, printer error, app restarted mid-print) | Check the printer and the Windows print queue; shopkeeper resolves it in the app. The system never reprints by itself |
 | Job `failed` with printer not found | The chosen printer was renamed or removed | Printers button in the app, choose it again |
 | SmartScreen or antivirus blocks the installer | Unsigned file | See `DESKTOP_DISTRIBUTION.md`; report the false positive to Microsoft; click Run anyway |
