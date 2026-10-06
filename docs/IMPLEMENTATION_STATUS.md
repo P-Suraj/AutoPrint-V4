@@ -222,3 +222,37 @@ Three parallel work streams, stopped early to save usage budget. Read the "not v
 **Not done:** `docs/RUNBOOK.md` and `docs/TEST_THE_WINDOWS_APP.md` do not describe the new tools and screens yet; new browser tests for the web changes; a soak measurement. Known and left: NUL bytes in text inputs still give 500; `claim_next_job` can deadlock with a customer cancel in a rare branch; no statement timeout.
 
 Founder statement (6 Oct): physical printing was tried on a real printer and worked. No results are recorded in the repository; the completion rule stays marked provisional until it is known whether that test went through this app.
+
+## Security and privacy review (6 October 2026, read-only)
+
+A read-only review of the whole system (API, SQL functions, website, Windows app, scripts, workflow; 5 unauthenticated header checks on the live site). No critical or high-severity issue. Fixes for items 1, 3, 4, 5, 7, 9 and the upload limit were handed to the backend and Windows app work on the same day; see the next status section for which landed.
+
+Confirmed (code path traced):
+1. MEDIUM. **Queue flood hides real jobs.** The shop poll returned the 60 newest jobs (`0004_agent_and_views.sql:68-69`), submit had no cap and an order can hold 20 files, so three orders from one phone could push older waiting jobs off the shopkeeper's screen.
+2. MEDIUM. **Storage can be filled.** The signed upload URL carries no size or type limit; size is only checked at finalize (`apps/api/app/storage.py:120-124`). **Founder action:** in Supabase, set the `print-documents` bucket to a 25 MB limit and `application/pdf` only.
+3. MEDIUM (privacy). **Deleted does not remove the file name.** `mark_document_deleted` (`0002_functions.sql:517-519`) kept `original_name` and the SHA-256 forever; order, job and event rows are never removed.
+4. MEDIUM-LOW. **Retention depends on someone calling.** Files are deleted only when a shop app polls or the scheduled workflow runs, and `job_document` checked `deleted_at`, not `delete_after`. **Founder action:** add the GitHub secret `AUTOPRINT_MAINTENANCE_TOKEN`.
+5. LOW-MEDIUM. **Page-range pricing bypass.** The parser accepted non-ASCII digits and newlines (`apps/api/app/pricing.py:21`); the desktop filter passed them to SumatraPDF (`SumatraEngine.cs:36`), which may then print every page.
+6. LOW. **Email sign-in** (not switched on): the 3-per-hour limit per email is not tied to the caller, so a known address can be locked out; registered addresses answer more slowly. Not fixed.
+7. LOW. **Rate-limit address hashes may be unsalted in production:** the salt is `signing_key`, which the deploy script never sets (`main.py:230`, `scripts/set_vercel_env.py:67-76`).
+8. LOW. **Shop link keys never expire and Sign out is local only** (`0007_shop_logins.sql:48-57`, `ShopDashboard.tsx`). Not fixed.
+9. LOW. **Purge matched every order of a shop with that 4-character code** in 30 days (`main.py`, `/v1/internal/purge`).
+
+Suspicions (cannot be proved from the repository):
+- Email sign-in takeover if Supabase Auth allows unconfirmed, password or OAuth sign-up (`email_auth.py:44-45`). **Before switching it on:** Confirm email ON, password and other providers OFF.
+- A malicious PDF is parsed unsandboxed by the Windows preview and SumatraPDF 3.6.1 on the shop PC. Very unlikely; keep both current.
+- Pairing-code phishing: someone who gets a shopkeeper to type a code from the attacker's PC gains a device for that shop. Codes are 40 bits, 15 minutes, and need a shop key.
+- The limiter trusts the first `X-Forwarded-For` value; believed overwritten by Vercel, not confirmed.
+
+Found sound: customer isolation (256-bit order secret, hashed, header only); shop isolation in every device and dashboard function; revoked devices and logins refused; maintenance token (192-bit, constant-time, required on every internal route); SumatraPDF started with an argument list and no shell, hash-checked; downloads size- and hash-checked, work files swept, DPAPI for secrets; no HTML injection sinks, no open redirect; live headers (CSP, frame denial, nosniff, no-referrer, HSTS, no-store on `/v1`); no secret in the working tree or in 41 commits.
+
+Could not assess: Supabase dashboard settings (bucket privacy and limits, Auth), Vercel environment values and logs, SumatraPDF's handling of an odd range, dependency advisories (no audit run; NuGet versions float), Windows spool files.
+
+## Review notes from the pilot-kit work (6 October 2026)
+
+- **Duplicate-print path (handed to the Windows app work):** after paper-out or printer-off the watcher gives up (`Evidence.cs:95`) and the job becomes "Needs attention" while the original can still sit in the Windows queue; "Print again" then prints twice when the printer recovers.
+- The report's "page opened to ..." timings start when the customer presses Continue after choosing a file (`apps/api/app/report.py:104,108`; the order is created at `ShopPage.tsx:150`), so scanning, page load and file picking are not measured. There is no measure of shopkeeper attention, only waiting time.
+- The customer page calls a shop offline after 45 s (`apps/api/app/settings.py:30`); the shop dashboard uses 60 s (`ShopDashboard.tsx:10`).
+- "Print a test page" tested only the black-and-white printer (`SettingsWindow.xaml.cs:69`).
+- **Cause of the founder's failed job BLS3 (6 Oct, 17:57):** the app's chosen printer was "Microsoft Print to PDF", which opens a Save As window and waits; the job ended `engine_failed_nothing_in_spooler` after 87 s. Every job through the installed app on the founder PC so far went to that virtual printer, so the completion rule is still unconfirmed on a physical printer through this app.
+- The permission system of the Claude Code session refused three actions on 6 Oct: applying migrations through `/v1/internal/migrate`, running `e2e/run_live_e2e.py`, and starting a payments agent on a separate branch. The founder runs the first two himself.
