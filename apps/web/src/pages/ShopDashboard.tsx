@@ -2,9 +2,13 @@
 // The key is read once from the link fragment (which browsers never send to a server), kept in this browser, and
 // removed from the address bar. Later sign-in methods (phone, email) will end by giving this page the same kind of key.
 import { useCallback, useEffect, useState } from "react";
+import QRCode from "qrcode";
 import { ApiError, shopApi, shopAuth, type Schemas } from "../api";
+import { Icon, TopBar, timeAgo } from "../ui";
 
 const KEY = "ap_shop_key";
+const ONLINE_WITHIN_MS = 60_000;          // the app polls every 10 s; a minute of silence means it is not running
+const REFRESH_MS = 10_000;
 
 function readKey(): string | null {
   const m = /[#&]key=([0-9a-f]{64})/.exec(window.location.hash);
@@ -48,97 +52,242 @@ function SignIn({ onKey }: { onKey: (key: string) => void }) {
 
   return (
     <main>
-      <h1>AutoPrint for shops</h1>
-      {state === "checking" ? <p>Signing you in…</p> : state === "sent" ? (
-        <p role="status">If that email is registered for a shop, a sign-in link is on its way. Open it on this phone or computer. It can take a minute.</p>
-      ) : (
-        <>
-          <p>Sign in with the email address AutoPrint has for your shop, or open the private link you were given.</p>
-          <input type="text" inputMode="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
-          <button className="primary" disabled={state === "sending" || !email.includes("@")} onClick={send}>Email me a sign-in link</button>
-        </>
-      )}
-      {error && <p role="alert" className="error">{error}</p>}
+      <TopBar />
+      <header className="hero">
+        <h1>AutoPrint for shops</h1>
+        <p>Customers send their files from their phones. You approve, the printer does the rest.</p>
+      </header>
+      <div className="card rise">
+        {state === "checking" ? <p className="center"><i className="spinner dark" />Signing you in…</p> : state === "sent" ? (
+          <div className="center">
+            <span className="art done small"><Icon.check size={26} /></span>
+            <p role="status">If that email is registered for a shop, a sign-in link is on its way. Open it on this phone or computer. It can take a minute.</p>
+            <button className="link" onClick={() => setState("idle")}>Use a different email</button>
+          </div>
+        ) : (
+          <form onSubmit={(e) => { e.preventDefault(); if (email.includes("@")) void send(); }}>
+            <label className="field">
+              <span className="field-label">Your email <small>The address AutoPrint has for your shop.</small></span>
+              <input type="text" inputMode="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
+            </label>
+            <button type="submit" className="primary big" disabled={state === "sending" || !email.includes("@")}>{state === "sending" ? <><i className="spinner" />Sending…</> : "Email me a sign-in link"}</button>
+            <p className="hint">Have a private link from AutoPrint? Just open it; it signs you in by itself.</p>
+          </form>
+        )}
+        {error && <p role="alert" className="error">{error}</p>}
+      </div>
     </main>
   );
 }
 
 export default function ShopDashboard() {
   const [key, setKey] = useState(readKey);
+  // a private link opened in a tab that already shows this page changes only the fragment: no reload happens
+  useEffect(() => {
+    const onHash = () => { if (/[#&]key=/.test(window.location.hash)) setKey(readKey()); };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
   if (!key) return <SignIn onKey={setKey} />;
   return <Dashboard shopKey={key} onSignOut={() => { try { localStorage.removeItem(KEY); } catch { /* nothing to do */ } setKey(null); }} />;
 }
 
 function Dashboard({ shopKey: key, onSignOut }: { shopKey: string; onSignOut: () => void }) {
   const [me, setMe] = useState<Schemas["ShopMe"] | null>(null);
-  const [devices, setDevices] = useState<Schemas["ShopDevice"][]>([]);
+  const [devices, setDevices] = useState<Schemas["ShopDevice"][] | null>(null);
+  const [now, setNow] = useState(Date.now);
   const [code, setCode] = useState("");
   const [found, setFound] = useState<Schemas["ShopPairLookup"] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pairError, setPairError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [expired, setExpired] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [qr, setQr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!me) return;
+    let alive = true;
+    QRCode.toDataURL(`${window.location.origin}/s/${me.shop_code}`, { width: 400, margin: 1, errorCorrectionLevel: "M" }).then((u) => alive && setQr(u)).catch(() => undefined);
+    return () => { alive = false; };
+  }, [me]);
 
   const refresh = useCallback(async () => {
-    if (!key) return;
     try {
-      setMe(await shopApi.me(key));
-      setDevices((await shopApi.devices(key)).devices);
+      const list = (await shopApi.devices(key)).devices;
+      setDevices(list); setNow(Date.now()); setError(null);
     } catch (e) {
-      setError(e instanceof ApiError && e.code === "unauthorized" ? "This link is no longer valid. Ask AutoPrint for a new one." : msg(e));
+      if (e instanceof ApiError && e.code === "unauthorized") setExpired(true);
+      else setError(msg(e));
     }
   }, [key]);
-  useEffect(() => { void refresh(); }, [refresh]);
 
-  const clean = code.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
-  async function look() {
-    setError(null); setNote(null); setFound(null); setBusy(true);
-    try { setFound(await shopApi.lookup(key!, clean)); } catch (e) { setError(msg(e)); } finally { setBusy(false); }
-  }
+  useEffect(() => {
+    shopApi.me(key).then(setMe).catch((e) => (e instanceof ApiError && e.code === "unauthorized" ? setExpired(true) : setError(msg(e))));
+  }, [key]);
+
+  // The page keeps itself current: the shopkeeper never needs a refresh button to see a computer come online.
+  useEffect(() => {
+    if (expired) return;
+    void refresh();
+    const t = window.setInterval(() => { if (document.visibilityState === "visible") void refresh(); }, REFRESH_MS);
+    return () => window.clearInterval(t);
+  }, [refresh, expired]);
+
+  // Typing the eighth character is enough: the code is looked up by itself.
+  const clean = code.replace(/[^A-Za-z0-9]/g, "").toUpperCase().slice(0, 8);
+  useEffect(() => {
+    setFound(null); setPairError(null);
+    if (clean.length !== 8) return;
+    let alive = true;
+    setBusy(true);
+    shopApi.lookup(key, clean).then((r) => alive && setFound(r)).catch((e) => alive && setPairError(msg(e))).finally(() => alive && setBusy(false));
+    return () => { alive = false; setBusy(false); };
+  }, [clean, key]);
+
   async function connect() {
-    setError(null); setBusy(true);
+    setPairError(null); setBusy(true);
     try {
-      const r = await shopApi.approve(key!, clean);
+      const r = await shopApi.approve(key, clean);
       setNote(`Connected: ${r.display_name}. The app on that computer will open in a few seconds.`);
-      setFound(null); setCode(""); await refresh();
-    } catch (e) { setError(msg(e)); } finally { setBusy(false); }
+      setCode(""); await refresh();
+    } catch (e) { setPairError(msg(e)); } finally { setBusy(false); }
   }
   async function disconnect(id: string) {
     if (!window.confirm("Disconnect this computer? It will stop receiving print jobs.")) return;
-    try { await shopApi.revoke(key!, id); await refresh(); } catch (e) { setError(msg(e)); }
+    try { await shopApi.revoke(key, id); await refresh(); } catch (e) { setError(msg(e)); }
   }
 
-  return (
-    <main>
-      <h1>{me ? me.shop_name : "AutoPrint for shops"}</h1>
-      {me && <p><a href={`/poster/${me.shop_code}`} target="_blank" rel="noreferrer">Print your counter sign (QR code)</a></p>}
-      <h2>Connect a computer</h2>
-      <p>Install the AutoPrint app on the shop computer and open it. Type the code it shows here.</p>
-      <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="ABCD-EFGH" maxLength={9} autoCapitalize="characters"
-             style={{ fontSize: 24, letterSpacing: 3, textTransform: "uppercase", width: "100%", boxSizing: "border-box" }} />
-      {clean.length === 8 && !found && <button disabled={busy} onClick={look}>Check code</button>}
-      {found && (
-        <div>
-          <p>Computer name: <strong>{found.display_name}</strong>. Is this the computer at your counter?</p>
-          {found.expired ? <p>This code has expired. Open the app again for a new code.</p>
-            : found.approved ? <p>This code was already used.</p>
-            : <button disabled={busy} onClick={connect}>Yes, connect it to {found.shop_name}</button>}
+  if (expired) {
+    return (
+      <main>
+        <TopBar />
+        <div className="card center rise">
+          <h1>Please sign in again</h1>
+          <p role="alert">This sign-in is no longer valid. Sign in with your email, or ask AutoPrint for a new link.</p>
+          <button className="primary big" onClick={onSignOut}>Sign in</button>
         </div>
-      )}
-      {note && <p role="status">{note}</p>}
-      {error && <p role="alert">{error}</p>}
+      </main>
+    );
+  }
 
-      <p><button className="link" onClick={onSignOut}>Sign out on this browser</button></p>
-      <h2>Your computers</h2>
-      {devices.length === 0 ? <p>None connected yet.</p> : (
-        <ul>
-          {devices.map((d) => (
-            <li key={d.device_id}>
-              {d.name} {d.revoked ? "(disconnected)" : d.last_seen_at ? `· last seen ${new Date(d.last_seen_at).toLocaleString()}` : "· not seen yet"}
-              {!d.revoked && <button onClick={() => disconnect(d.device_id)}>Disconnect</button>}
-            </li>
-          ))}
-        </ul>
+  const link = me ? `${window.location.origin}/s/${me.shop_code}` : "";
+  async function copyLink() {
+    try { await navigator.clipboard.writeText(link); setCopied(true); window.setTimeout(() => setCopied(false), 2000); }
+    catch { window.prompt("Copy this link:", link); }
+  }
+  const canShare = typeof navigator.share === "function";
+
+  const active = (devices ?? []).filter((d) => !d.revoked);
+  const gone = (devices ?? []).filter((d) => d.revoked);
+  const isOnline = (d: Schemas["ShopDevice"]) => !!d.last_seen_at && now - new Date(d.last_seen_at).getTime() < ONLINE_WITHIN_MS;
+  const online = active.some(isOnline);
+  const shown = code.length > 4 || clean.length > 4 ? `${clean.slice(0, 4)}-${clean.slice(4)}` : clean;
+
+
+  return (
+    <main className="desk">
+      <TopBar to="/shop"><button className="link" onClick={onSignOut}>Sign out</button></TopBar>
+
+      <header className="desk-head">
+        <div>
+          <p className="eyebrow">Shop dashboard</p>
+          <h1>{me ? me.shop_name : "AutoPrint for shops"}</h1>
+        </div>
+        {me && <span className="pill"><span className="muted-label">Shop code</span><span className="code">{me.shop_code}</span></span>}
+      </header>
+
+      {devices === null ? <div className="skeleton block" /> : (
+        <section className={`status-hero ${online ? "ok" : active.length ? "warn" : "new"} rise`} role="status">
+          <span className={`art ${online ? "done" : active.length ? "bad" : "wait"}`}>{online ? <Icon.check size={34} /> : active.length ? <Icon.alert size={30} /> : <Icon.monitor size={30} />}</span>
+          <div>
+            {online ? <><h2>Your shop is open for prints</h2><p>The shop computer is connected. New print requests appear in the AutoPrint app there, where you approve them.</p></>
+              : active.length ? <><h2>Your shop computer is offline</h2><p>Customers can still send files; they wait until the computer is on. Check that it is switched on, online and that AutoPrint is running.</p></>
+              : <><h2>Connect your shop computer</h2><p>One step left: link the computer at your counter, and customers can start sending prints.</p></>}
+          </div>
+          <div className="hero-stat">
+            <strong>{active.filter(isOnline).length}<small> / {active.length}</small></strong>
+            <span>computers online</span>
+          </div>
+        </section>
       )}
+      {error && <p role="alert" className="error">{error}</p>}
+
+      <div className="desk-grid">
+        <div className="desk-main">
+          <section className="card rise">
+            <div className="card-head">
+              <h2><Icon.monitor size={20} />Your computers</h2>
+              <span className="meta">Updates by itself every few seconds</span>
+            </div>
+            {devices !== null && active.length === 0 ? <p className="meta">None connected yet. Use the panel below to connect the first one.</p> : (
+              <table className="table">
+                <thead><tr><th>Computer</th><th>Status</th><th>Last seen</th><th><span className="sr-only">Actions</span></th></tr></thead>
+                <tbody>
+                  {active.map((d) => (
+                    <tr key={d.device_id}>
+                      <td><strong>{d.name}</strong></td>
+                      <td><span className={`pill ${isOnline(d) ? "ok" : ""}`}><i className="dot" />{isOnline(d) ? "Online" : "Offline"}</span></td>
+                      <td className="meta">{d.last_seen_at ? timeAgo(d.last_seen_at, now) : "Not seen yet"}</td>
+                      <td className="right"><button onClick={() => disconnect(d.device_id)}>Disconnect</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {gone.length > 0 && (
+              <details className="peek"><summary>Disconnected computers ({gone.length})</summary>
+                <ul className="devices muted">{gone.map((d) => <li key={d.device_id}><i className="dot off" /><div><strong>{d.name}</strong><small>Disconnected</small></div></li>)}</ul>
+              </details>
+            )}
+          </section>
+
+          <section className="card rise">
+            <div className="card-head"><h2><Icon.printer size={20} />Connect a computer</h2></div>
+            <div className="connect">
+              <ol className="howto">
+                <li>Install and open the AutoPrint app on the shop computer.</li>
+                <li>The app shows a code. Type it here.</li>
+                <li>Check the computer's name and confirm.</li>
+              </ol>
+              <div className="connect-box">
+                <input className="code code-input" value={shown} onChange={(e) => { setCode(e.target.value); setNote(null); }} placeholder="ABCD-EFGH" maxLength={9}
+                       aria-label="Code shown by the AutoPrint app" autoCapitalize="characters" autoComplete="off" spellCheck={false} />
+                {busy && !found && <p className="meta"><i className="spinner dark" />Checking the code…</p>}
+                {found && (
+                  <div className="confirm rise">
+                    <p>Computer name: <strong>{found.display_name}</strong>. Is this the computer at your counter?</p>
+                    {found.expired ? <p className="error">This code has expired. Open the app again for a new code.</p>
+                      : found.approved ? <p className="error">This code was already used.</p>
+                      : <button className="primary big" disabled={busy} onClick={connect}>Yes, connect it to {found.shop_name}</button>}
+                  </div>
+                )}
+                {note && <p role="status" className="found"><span className="tick"><Icon.check size={14} /></span>{note}</p>}
+                {pairError && <p role="alert" className="error">{pairError}</p>}
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <aside className="desk-side">
+          <section className="card rise">
+            <div className="card-head"><h2><Icon.qr size={20} />Your customers' link</h2></div>
+            <p className="meta">Customers scan the sign at your counter, or open this link. Nothing to install.</p>
+            {qr && <img className="qr" src={qr} alt={`QR code for ${link}`} width={200} height={200} />}
+            {me && (
+              <>
+                <p className="linkbox">{link.replace(/^https?:\/\//, "")}</p>
+                <div className="actions">
+                  <button onClick={copyLink}><Icon.copy size={18} />{copied ? "Copied" : "Copy link"}</button>
+                  {canShare && <button onClick={() => { void navigator.share({ title: me.shop_name, text: `Print at ${me.shop_name} from your phone`, url: link }).catch(() => undefined); }}>Share</button>}
+                </div>
+                <a className="button primary" href={`/poster/${me.shop_code}`} target="_blank" rel="noreferrer"><Icon.printer size={18} />Print your counter sign</a>
+              </>
+            )}
+          </section>
+        </aside>
+      </div>
     </main>
   );
 }

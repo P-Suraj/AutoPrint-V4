@@ -58,14 +58,18 @@ export const api = {
  * Upload the PDF with a raw PUT to the signed URL.
  * Never FormData: V3 sent multipart to a raw upload URL and the stored file was not a PDF.
  */
-export async function uploadPdf(url: string, headers: Record<string, string>, file: File): Promise<void> {
-  let res: Response;
-  try {
-    res = await fetch(url, { method: "PUT", headers, body: file });
-  } catch {
-    throw new ApiError("network", "The upload was interrupted. Check your connection and try again.");
-  }
-  if (!res.ok) throw new ApiError("upload_failed", "The upload did not complete. Please try again.", res.status);
+export function uploadPdf(url: string, headers: Record<string, string>, file: File, onProgress?: (fraction: number) => void): Promise<void> {
+  // XMLHttpRequest, not fetch: it is the only way a browser reports how much of an upload has been sent.
+  return new Promise((resolve, reject) => {
+    const interrupted = () => reject(new ApiError("network", "The upload was interrupted. Check your connection and try again."));
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", url);
+    for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
+    if (onProgress) xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+    xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new ApiError("upload_failed", "The upload did not complete. Please try again.", xhr.status)));
+    xhr.onerror = interrupted; xhr.onabort = interrupted; xhr.ontimeout = interrupted;
+    xhr.send(file);
+  });
 }
 
 export { secretHeader };
