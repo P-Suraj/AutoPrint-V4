@@ -66,6 +66,7 @@ export default function ShopDashboard() {
   return (
     <main>
       <h1>{me ? me.shop_name : "AutoPrint for shops"}</h1>
+      {me && <p><a href={`/poster/${me.shop_code}`} target="_blank" rel="noreferrer">Print your counter sign (QR code)</a></p>}
       <h2>Connect a computer</h2>
       <p>Install the AutoPrint app on the shop computer and open it. Type the code it shows here.</p>
       <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="ABCD-EFGH" maxLength={9} autoCapitalize="characters"

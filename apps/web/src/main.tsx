@@ -5,6 +5,7 @@ import { forgetShop, normalizeShopCode, savedShops } from "./shopCode";
 import OrderPage from "./pages/OrderPage";
 import ShopPage from "./pages/ShopPage";
 import ShopDashboard from "./pages/ShopDashboard";
+import PosterPage from "./pages/PosterPage";
 import "./styles.css";
 
 function Home() {
@@ -56,6 +57,7 @@ createRoot(document.getElementById("root")!).render(
         <Route path="/" element={<Home />} />
         <Route path="/s/:shopCode" element={<ShopPage />} />
         <Route path="/shop" element={<ShopDashboard />} />
+        <Route path="/poster/:shopCode" element={<PosterPage />} />
         <Route path="/o/:orderId" element={<OrderPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
