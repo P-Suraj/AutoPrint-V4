@@ -16,10 +16,17 @@ public sealed class SumatraEngine(string exePath) : IPrintEngine
 
     public static bool IsGenuinePortable(string path)
     {
-        if (!File.Exists(path)) return false;
-        using var s = File.OpenRead(path);
-        return Convert.ToHexString(SHA256.HashData(s)).Equals(PortableSha256, StringComparison.OrdinalIgnoreCase);
+        try
+        {
+            if (!File.Exists(path)) return false;
+            using var s = File.OpenRead(path);
+            return Convert.ToHexString(SHA256.HashData(s)).Equals(PortableSha256, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }   // quarantined or locked by antivirus: not usable
     }
+
+    public const string NotReadyReason = "sumatra_missing_or_not_the_portable_build";
+    public string? NotReady() => IsGenuinePortable(exePath) ? null : NotReadyReason;
 
     public static string SettingsFor(Shop.PrintOptions o)
     {
@@ -34,8 +41,10 @@ public sealed class SumatraEngine(string exePath) : IPrintEngine
 
     public async Task<SubmitResult> SubmitAsync(PrintRequest r, CancellationToken ct)
     {
-        if (!IsGenuinePortable(exePath)) return new(false, "sumatra_missing_or_not_the_portable_build");
+        if (!IsGenuinePortable(exePath)) return new(false, NotReadyReason);
         if (!File.Exists(r.FilePath)) return new(false, "file_missing");
+        // SumatraPDF does not fail on a printer name that does not exist: it hangs. Never start it for one.
+        if (!new WinSpoolObserver().PrinterExists(r.Printer)) return new(false, "printer_not_found");
 
         var psi = new ProcessStartInfo(exePath) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true, RedirectStandardOutput = true };
         foreach (var a in new[] { "-print-to", r.Printer, "-print-settings", SettingsFor(r.Options), r.FilePath }) psi.ArgumentList.Add(a);
@@ -51,7 +60,8 @@ public sealed class SumatraEngine(string exePath) : IPrintEngine
         try { await p.WaitForExitAsync(timeout.Token); }
         catch (OperationCanceledException)
         {
-            try { p.Kill(entireProcessTree: true); } catch (InvalidOperationException) { /* already gone */ }
+            try { p.Kill(entireProcessTree: true); }
+            catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception or AggregateException) { /* already gone, or going */ }
             if (ct.IsCancellationRequested) throw;                              // the app is shutting down
             return new(false, "engine_timeout");                                // a hung process: the observer will see any orphan
         }

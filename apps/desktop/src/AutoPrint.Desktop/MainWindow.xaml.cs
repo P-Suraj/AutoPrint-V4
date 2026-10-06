@@ -6,7 +6,10 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Documents;
 using System.Windows.Media;
+using System.Windows.Threading;
 using AutoPrint.Core;
 using AutoPrint.Core.Agent;
 using AutoPrint.Core.Printing;
@@ -14,180 +17,736 @@ using AutoPrint.Core.Shop;
 
 namespace AutoPrint.Desktop;
 
+/// <summary>What Windows says about the chosen printers and whether the print program is intact. Read on a background thread.</summary>
+public sealed record Health(PrinterHealth? Bw, PrinterHealth? Colour, bool EngineOk);
+
+/// <summary>
+/// The shopkeeper's one window. Nothing here waits on the network, the disk, the spooler or a printer: that work runs
+/// on background threads and comes back as a state to show. The lists are updated in place, keyed by job, so a poll
+/// that changes nothing touches nothing (no flicker, hover and keyboard focus stay where they are).
+/// </summary>
 public partial class MainWindow : Window
 {
     private readonly string _version;
-    private readonly Settings _settings = Settings.Load();
-    private readonly ICredentialStore _store = new DpapiCredentialStore(DpapiCredentialStore.DefaultPath());
+    private readonly Settings _settings;
+    private readonly ICredentialStore _store;
+    private readonly bool _live;                                   // false in the UI self-test: no network, no timers, no sound
     private CancellationTokenSource _cts = new();
+    private DeviceCredentials? _creds;
     private ShopApi? _api;
     private AgentService? _agent;
-    private Journal? _journal;
-    private readonly HashSet<Guid> _announced = new();
+    private AgentState _state = new(false, false, null, null, null, null);
+    private Health? _health;
+    private bool _healthBusy;
+    private (long Length, DateTime Written, bool Ok)? _engineSeen;
+    private readonly AlertPolicy _alerts = new();
+    private readonly Dictionary<Guid, DateTimeOffset?> _busy = new();   // answers on their way: null = being sent, time = sent, waiting for the queue to show it
+    private Guid? _confirmRetry;
+    private string? _notice;
+    private DateTimeOffset _noticeAt, _shiftedAt, _pairExpires;
+    private bool _pairing, _pairOffline, _toldAboutTray;
+    private string _finishedShown = "";
+    private PreviewWindow? _preview;
+    private readonly DispatcherTimer _tick = new(), _healthTimer = new() { Interval = TimeSpan.FromSeconds(30) };
+    private readonly SolidColorBrush _dot = new(Colors.LightGray);
 
-    public MainWindow(string version) { _version = version; InitializeComponent(); }
+    /// <summary>Replaced by the self-test so its pictures do not depend on the time of day.</summary>
+    internal Func<DateTimeOffset> Clock = () => DateTimeOffset.UtcNow;
+
+    public MainWindow(string version, Settings settings, ICredentialStore store, bool live = true)
+    {
+        _version = version; _settings = settings; _store = store; _live = live;
+        InitializeComponent();
+        StatusDot.Fill = _dot;
+        // a small or scaled-up screen (a 1366 x 768 laptop at 150%) must still show the whole window
+        Width = Math.Min(Width, SystemParameters.WorkArea.Width); Height = Math.Min(Height, SystemParameters.WorkArea.Height);
+        _tick.Tick += (_, _) => Tick();
+        _healthTimer.Tick += (_, _) => _ = RefreshHealthAsync();
+        IsVisibleChanged += (_, _) => Timers();
+        Activated += (_, _) => Alerts.Flash(this, on: false);
+        PreviewKeyDown += (_, e) => { if (e.Key == System.Windows.Input.Key.F && System.Windows.Input.Keyboard.Modifiers == System.Windows.Input.ModifierKeys.Control && QueueView.IsVisible) { TabFinished.IsChecked = true; SearchBox.Focus(); e.Handled = true; } };
+    }
 
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
         e.Cancel = true;                                          // closing the window keeps printing; Quit is in the tray menu
         Hide();
+        if (_live && !_toldAboutTray) { _toldAboutTray = true; App.Current.Notify("AutoPrint is still running. New print requests will still arrive. To stop it, right-click this icon and choose Quit."); }
     }
 
-    public void Start() => _ = RunAsync();
-    public void Stop() { _cts.Cancel(); _journal?.Dispose(); }
+    public void Start() => _ = RunAsync(_cts.Token);
+    public void Stop() => _cts.Cancel();
+    public bool IsPrinting => _state.Current is not null;
+    public void WakeAgent() => _agent?.Wake();
 
-    private async Task RunAsync()
+    /// <summary>Timers run only while the window can be seen, so a window sitting in the tray all day costs nothing.</summary>
+    private void Timers()
     {
-        try
+        bool on = _live && IsVisible;
+        _tick.Interval = TimeSpan.FromSeconds(_pairing ? 1 : 15);
+        _tick.IsEnabled = on; _healthTimer.IsEnabled = on && _agent is not null;
+        if (on) { Tick(); if (_agent is not null) _ = RefreshHealthAsync(); }
+    }
+
+    // ---------------------------------------------------------------- starting and pairing
+    private enum View { Start, Pair, Queue }
+
+    private void ShowView(View v)
+    {
+        void Set(UIElement e, bool show) { if (show && e.Visibility != Visibility.Visible) Motion.Fade(e); e.Visibility = show ? Visibility.Visible : Visibility.Collapsed; }
+        Set(StartView, v == View.Start); Set(PairView, v == View.Pair); Set(QueueView, v == View.Queue);
+        SettingsButton.Visibility = v == View.Queue ? Visibility.Visible : Visibility.Collapsed;
+        _pairing = v == View.Pair;
+        if (v != View.Queue) { SyncList(Banners, _bannerEntries, [], animate: false); SetStatus(null, v == View.Pair ? "Not connected yet" : "Starting…"); }
+        Timers();
+    }
+
+    /// <summary>Runs until this PC is connected and the agent is started. Every failure on the way is shown in plain
+    /// words and tried again by itself: this loop never ends silently, whatever goes wrong.</summary>
+    private async Task RunAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
         {
-            var creds = _store.Load();
-            while (creds is null && !_cts.IsCancellationRequested) creds = await PairAsync();
-            if (creds is not null) StartAgent(creds);
+            try
+            {
+                ShowView(View.Start); StartTitle.Text = "Starting…"; StartNote.Text = "";
+                await Task.Run(CleanLeftovers, ct);
+                var creds = await Task.Run(_store.Load, ct);
+                while (creds is null) creds = await PairAsync(ct);
+                await StartAgentAsync(creds, ct);
+                return;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
+            catch (Exception e)
+            {
+                App.Log("start: " + SafeText.Describe(e));
+                ShowView(View.Start);
+                StartTitle.Text = "AutoPrint could not start yet";
+                StartNote.Text = "It cannot read or write its own files on this computer right now. It is trying again by itself. If this message stays, restart the computer.";
+                try { await Task.Delay(TimeSpan.FromSeconds(5), ct); } catch (OperationCanceledException) { return; }
+            }
         }
-        catch (OperationCanceledException) { }
     }
 
-    // ---------------------------------------------------------------- pairing
-    private async Task<DeviceCredentials?> PairAsync()
+    /// <summary>No customer document survives a restart: whatever a crash or a power cut left in the work folders goes now.</summary>
+    private static void CleanLeftovers()
     {
-        ShowView(pair: true);
-        StatusText.Text = "Not connected"; SetDot(Brushes.Gray);
+        foreach (var d in new[] { "work", "preview", "testpage" }) WorkFiles.CleanStale(Path.Combine(Settings.Dir, d));
+    }
+
+    private async Task<DeviceCredentials?> PairAsync(CancellationToken ct)
+    {
+        ShowView(View.Pair);
+        PairStep3.Text = $"Check the computer name ({Environment.MachineName}) and press “Yes, connect it”.";
+        PairCode.Text = "····-····"; PairCode.Opacity = 0.35; _pairExpires = default; _pairOffline = false;
+        PairNote.Text = "Getting a code…";
         PairingSession session;
-        try
-        {
-            session = await Pairing.StartAsync(App.Http, _settings.ApiBaseUrl, Environment.MachineName, _cts.Token);
-        }
+        try { session = await Pairing.StartAsync(App.Http, _settings.ApiBaseUrl, Environment.MachineName, ct); }
         catch (Exception e) when (e is ServerUnreachableException or ApiRejectedException)
         {
-            PairCode.Text = "····-····";
-            PairNote.Text = e is ApiRejectedException ? "Too many codes right now. Retrying in a moment…" : "No internet connection. Retrying…";
-            await Task.Delay(TimeSpan.FromSeconds(8), _cts.Token);
+            for (int s = 8; s > 0; s--)                              // recovers by itself; the shopkeeper only has to wait
+            {
+                PairNote.Text = (e is ApiRejectedException ? "AutoPrint is busy right now." : "No internet connection.") + $" Trying again in {s} s…";
+                await Task.Delay(1000, ct);
+            }
             return null;
         }
-        PairCode.Text = session.Code;
-        PairNote.Text = "Waiting for approval. The code works for 15 minutes.";
-        var creds = await Pairing.WaitForApprovalAsync(App.Http, session, null, _cts.Token);
-        if (creds is not null) _store.Save(creds);
-        return creds;                                            // null = expired: the loop shows a fresh code
+        PairCode.Text = session.Code; PairCode.Opacity = 1; Motion.Fade(PairCode);
+        // if this PC's clock is wrong the server's expiry time means nothing here: fall back to the 15 minutes a code lasts
+        var left = session.ExpiresAt - DateTimeOffset.UtcNow;
+        if (left <= TimeSpan.FromSeconds(30) || left > TimeSpan.FromMinutes(20)) left = TimeSpan.FromMinutes(15);
+        _pairExpires = DateTimeOffset.UtcNow + left;
+        Tick();
+        using var life = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        life.CancelAfter(left);
+        try
+        {
+            var creds = await Pairing.WaitForApprovalAsync(App.Http, session, null, life.Token, ok => Dispatcher.BeginInvoke(() => { _pairOffline = !ok; Tick(); }));
+            if (creds is not null) await Task.Run(() => _store.Save(creds), ct);
+            return creds;                                            // null = expired: the loop shows a fresh code
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return null; }      // the code ran out: get a new one
+        catch (ApiRejectedException) { return null; }
     }
 
-    private void OnNewCode(object sender, RoutedEventArgs e) => _ = RestartPairing();
+    private void OnNewCode(object sender, RoutedEventArgs e) => RestartPairing(null);
 
-    private async Task RestartPairing()
+    private void RestartPairing(string? why)
     {
         _cts.Cancel(); _cts = new CancellationTokenSource();
-        await RunAsync();
+        _agent = null; _api = null; _creds = null; _health = null; _busy.Clear();
+        _state = new(false, false, null, null, null, null);
+        PairWhy.Text = why ?? "You do this once. It takes about a minute.";
+        ShopTitle.Text = "AutoPrint"; ShopSub.Text = "Print requests from your customers";
+        _ = RunAsync(_cts.Token);
     }
 
     // ---------------------------------------------------------------- running
-    private void StartAgent(DeviceCredentials creds)
+    private async Task StartAgentAsync(DeviceCredentials creds, CancellationToken ct)
     {
-        Directory.CreateDirectory(Settings.Dir);
-        _api = new ShopApi(App.Http, creds, _version);
-        _journal = new Journal(Path.Combine(Settings.Dir, "journal.db"));
-        var sumatra = Path.Combine(AppContext.BaseDirectory, "tools", "SumatraPDF.exe");
-        var orchestrator = new PrintOrchestrator(_api, new SumatraEngine(sumatra), new WinSpoolObserver(), _journal, new HttpDownloader(App.Http),
+        bool fresh = false;
+        var journal = await Task.Run(() =>
+        {
+            Directory.CreateDirectory(Settings.Dir);
+            var j = Journal.OpenOrSetAside(Path.Combine(Settings.Dir, "journal.db"), m => { fresh = true; App.Log(m); });
+            try { j.Prune(TimeSpan.FromDays(30)); } catch (Exception e) { App.Log("journal prune: " + e.GetType().Name); }
+            return j;
+        }, ct);
+        var api = new ShopApi(App.Http, creds, _version);
+        var orchestrator = new PrintOrchestrator(api, new SumatraEngine(SumatraPath), new WinSpoolObserver(), journal, new HttpDownloader(App.Http),
             new OrchestratorOptions(Path.Combine(Settings.Dir, "work"), _settings.PrinterFor), App.Log);
-        _agent = new AgentService(_api, orchestrator, log: App.Log);
-        _agent.StateChanged += s => Dispatcher.BeginInvoke(() => Render(s));
+        var agent = new AgentService(api, orchestrator, log: App.Log);
+        agent.StateChanged += s => Dispatcher.BeginInvoke(() => { if (ReferenceEquals(agent, _agent)) OnState(s); });
+        _api = api; _agent = agent; _creds = creds;
+        ShowQueue(creds);
+        if (fresh) Notice("AutoPrint started a new print record because the old one was damaged. If a request shows “Needs your attention”, look at the printer before you choose.");
+        _ = Task.Run(() => agent.RunAsync(ct), ct);                 // the whole agent, the journal and the spooler watch run off the window's thread
+        _ = RefreshHealthAsync();
+        if (string.IsNullOrEmpty(_settings.BlackWhitePrinter) && IsVisible) _ = Dispatcher.BeginInvoke(() => OnSettings(this, new RoutedEventArgs()));
+    }
+
+    internal static string SumatraPath => Path.Combine(AppContext.BaseDirectory, "tools", "SumatraPDF.exe");
+
+    private void ShowQueue(DeviceCredentials creds)
+    {
+        _creds = creds;
         ShopTitle.Text = creds.ShopName;
-        ShowView(pair: false);
-        if (string.IsNullOrEmpty(_settings.BlackWhitePrinter)) OnSettings(this, new RoutedEventArgs());
-        _ = _agent.RunAsync(_cts.Token);
+        ShowView(View.Queue);
+        Render();
     }
 
-    private void Render(AgentState s)
+    private void OnState(AgentState s)
     {
-        if (s.NeedsPairing) { _store.Clear(); _ = RestartPairing(); return; }
-        SetDot(s.Online ? Brushes.SeaGreen : Brushes.OrangeRed);
-        StatusText.Text = s.Current is { } c ? ActivityText(c) : s.Online ? "Online" : "Offline: retrying";
-        bool noPrinter = string.IsNullOrEmpty(_settings.BlackWhitePrinter);
-        ShowBanner(s.Problem ?? (noPrinter ? "Choose a printer under “Printers…” before approving jobs." : null));
-
-        var jobs = (s.Queue?.Jobs ?? Array.Empty<JobSummary>())
-            .Where(j => j.Status is JobStatus.AwaitingApproval or JobStatus.Approved or JobStatus.Printing or JobStatus.NeedsAttention).ToList();
-        EmptyText.Visibility = jobs.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        Cards.Children.Clear();
-        foreach (var j in jobs) Cards.Children.Add(Card(j, noPrinter));
-        foreach (var j in jobs.Where(j => j.Status == JobStatus.AwaitingApproval && _announced.Add(j.JobId)))
-            ((App)Application.Current).Notify($"New print request: {j.DocumentName}");
+        if (s.NeedsPairing)
+        {
+            App.Log("this PC is no longer connected to the shop: showing a new code");
+            try { _store.Clear(); } catch (Exception e) { App.Log("credentials not cleared: " + e.GetType().Name); }
+            RestartPairing("This computer was disconnected from the shop. To connect it again, use the new code below.");
+            return;
+        }
+        _state = s;
+        if (s.Queue is { } q)
+        {
+            foreach (var id in _busy.Where(b => b.Value is { } sent && sent < q.At).Select(b => b.Key).ToList()) _busy.Remove(id);   // the queue now shows the answer
+            if (_confirmRetry is { } c && !q.Jobs.Any(j => j.JobId == c && j.Status == JobStatus.NeedsAttention)) _confirmRetry = null;
+            Alert(_alerts.Next(q.Jobs, DateTimeOffset.UtcNow));
+            _preview?.JobChanged(q.Jobs.FirstOrDefault(j => j.JobId == _preview.JobId));
+        }
+        Render();
     }
 
-    private static string ActivityText(Activity a) => a.Stage switch
+    // ---------------------------------------------------------------- getting noticed
+    private void Alert(Alert a)
     {
-        Stage.Downloading => "Getting the file…", Stage.Printing => "Sending to the printer…",
-        Stage.Watching => "Printing…", Stage.Reporting => "Finishing…", _ => "Working…"
-    };
+        if (!_live || a.Kind == AlertKind.None) return;
+        if (_settings.SoundOn) Alerts.Chime();
+        if (!IsActive)
+        {
+            if (!IsVisible) { ShowActivated = false; WindowState = WindowState.Minimized; Show(); }     // back on the taskbar, without taking the keyboard
+            Alerts.Flash(this);
+        }
+        if (a.Kind == AlertKind.New)
+            App.Current.Notify(a.Count == 1 ? $"New print request: {a.FirstDocument}" : $"{a.Count} print requests are waiting for you");
+    }
 
-    private UIElement Card(JobSummary j, bool noPrinter)
+    // ---------------------------------------------------------------- printer and print program health
+    private async Task RefreshHealthAsync()
     {
-        var panel = new StackPanel();
-        panel.Children.Add(new TextBlock { Text = j.DocumentName, FontWeight = FontWeights.SemiBold, FontSize = 16, TextTrimming = TextTrimming.CharacterEllipsis });
-        var detail = $"{j.OrderShortCode}  ·  {j.PageCount} pages  ·  {j.Copies} {(j.Copies == 1 ? "copy" : "copies")}  ·  {(j.Color ? "Colour" : "Black & white")}  ·  {(j.Duplex ? "Both sides" : "One side")}";
-        if (!string.IsNullOrWhiteSpace(j.PageRange)) detail += $"  ·  pages {j.PageRange}";
-        panel.Children.Add(new TextBlock { Text = detail, Foreground = Brushes.DimGray, Margin = new Thickness(0, 2, 0, 0) });
-        panel.Children.Add(new TextBlock { Text = $"₹{j.AmountPaise / 100m:0.##}", Margin = new Thickness(0, 2, 0, 8) });
+        if (!_live || _healthBusy || _agent is null) return;
+        _healthBusy = true;
+        try
+        {
+            string bw = _settings.BlackWhitePrinter ?? "", colour = _settings.ColorPrinter ?? "";
+            var seen = _engineSeen;
+            var (health, engine) = await Task.Run(() =>
+            {
+                // hashing the print program is the costly part: only again when the file itself has changed
+                var f = new FileInfo(SumatraPath);
+                long length = f.Exists ? f.Length : -1; DateTime written = f.Exists ? f.LastWriteTimeUtc : default;
+                bool ok = seen is { } s && s.Length == length && s.Written == written ? s.Ok : SumatraEngine.IsGenuinePortable(SumatraPath);
+                return (new Health(bw == "" ? null : WinSpoolObserver.Health(bw), colour == "" ? null : WinSpoolObserver.Health(colour), ok), (length, written, ok));
+            });
+            _engineSeen = engine;
+            if (health != _health) { _health = health; Render(); }
+        }
+        catch (Exception e) { App.Log("health check: " + SafeText.Describe(e)); }
+        finally { _healthBusy = false; }
+    }
 
-        var row = new StackPanel { Orientation = Orientation.Horizontal };
+    internal void SetHealth(Health h) { _health = h; Render(); }
+
+    // ---------------------------------------------------------------- time
+    /// <summary>The server's clock, carried forward: waiting and expiry times stay right when this PC's clock is wrong.</summary>
+    private DateTimeOffset ServerNow() => _state.Queue is { ServerNow: { } server } q ? server + (Clock() - q.At) : Clock();
+
+    private void Tick()
+    {
+        if (_pairing)
+        {
+            if (_pairExpires == default) return;
+            var left = _pairExpires - DateTimeOffset.UtcNow; if (left < TimeSpan.Zero) left = TimeSpan.Zero;
+            PairNote.Text = (_pairOffline ? "No internet connection. Trying again by itself. " : "Waiting for you to type the code. ") + $"It works for {(int)left.TotalMinutes}:{left.Seconds:00} more.";
+            return;
+        }
+        var now = ServerNow();
+        foreach (var e in _cardEntries.Values) e.Live?.Invoke(now);
+        if (_notice is not null && Clock() - _noticeAt > TimeSpan.FromSeconds(20)) { _notice = null; Render(); }
+        foreach (var id in _busy.Where(b => b.Value is { } sent && Clock() - sent > TimeSpan.FromSeconds(30)).Select(b => b.Key).ToList()) { _busy.Remove(id); Render(); }
+        if (_live && _state.Queue is { } q) Alert(_alerts.Next(q.Jobs, DateTimeOffset.UtcNow));
+    }
+
+    // ---------------------------------------------------------------- keyed lists: change only what changed
+    private sealed class Entry { public required Border Root; public string Sig = ""; public Action<DateTimeOffset>? Live; public bool Leaving; }
+    private sealed record Wanted(string Key, string Sig, Func<(UIElement Content, Action<DateTimeOffset>? Live)> Build);
+    private readonly Dictionary<string, Entry> _cardEntries = new(), _bannerEntries = new();
+
+    private void SyncList(Panel panel, Dictionary<string, Entry> map, IReadOnlyList<Wanted> wanted, bool animate)
+    {
+        var keep = wanted.Select(w => w.Key).ToHashSet();
+        foreach (var (key, old) in map.Where(m => !keep.Contains(m.Key) && !m.Value.Leaving).ToList())
+        {
+            old.Leaving = true; old.Root.Tag = "leaving";
+            void Gone() { panel.Children.Remove(old.Root); if (map.TryGetValue(key, out var cur) && ReferenceEquals(cur, old)) map.Remove(key); }
+            if (animate) Motion.Leave(old.Root, Gone); else Gone();
+        }
+        int at = 0; bool moved = false;
+        foreach (var w in wanted)
+        {
+            map.TryGetValue(w.Key, out var e);
+            if (e is null || e.Leaving)
+            {
+                var (content, live) = w.Build();
+                e = new Entry { Root = new Border { Child = content }, Sig = w.Sig, Live = live };
+                map[w.Key] = e; moved = true;
+                if (animate) Motion.Enter(e.Root);
+            }
+            else if (e.Sig != w.Sig)
+            {
+                var (content, live) = w.Build();
+                e.Root.Child = content; e.Sig = w.Sig; e.Live = live;
+            }
+            while (at < panel.Children.Count && panel.Children[at] is Border { Tag: "leaving" }) at++;
+            if (at >= panel.Children.Count || !ReferenceEquals(panel.Children[at], e.Root))
+            {
+                if (panel.Children.Contains(e.Root)) { panel.Children.Remove(e.Root); moved = true; }
+                panel.Children.Insert(Math.Min(at, panel.Children.Count), e.Root);
+            }
+            at++;
+        }
+        if (moved && ReferenceEquals(panel, Cards)) _shiftedAt = Clock();
+    }
+
+    // ---------------------------------------------------------------- the screen
+    private bool Offline => !_state.Online;
+
+    private void Render()
+    {
+        if (_creds is null) return;
+        var s = _state;
+        var jobs = s.Queue?.Jobs ?? Array.Empty<JobSummary>();
+        var now = ServerNow();
+
+        if (s.Queue is { } q && q.ShopName.Length > 0) ShopTitle.Text = q.ShopName;
+        var printer = _settings.BlackWhitePrinter;
+        ShopSub.Text = $"Shop code {_creds.ShopCode}" + (string.IsNullOrEmpty(printer) ? "" : $"   ·   Printer: {printer}");
+        if (s.Queue is null && !s.Online && s.LastPollAt is null && s.Problem is null) SetStatus(null, "Connecting…");
+        else SetStatus(s.Online, s.Online ? "Connected" : "No internet");
+
+        SyncList(Banners, _bannerEntries, WantedBanners(s), animate: true);
+
+        // needs attention first, then what is printing, then what waits for an answer (oldest first, so nothing is forgotten
+        // and a new request never pushes the card under the pointer)
+        var attention = jobs.Where(j => j.Status == JobStatus.NeedsAttention).OrderBy(j => j.CreatedAt).ToList();
+        var printing = jobs.Where(j => j.Status is JobStatus.Printing or JobStatus.Approved).OrderBy(j => j.Status == JobStatus.Printing ? 0 : 1).ThenBy(j => j.CreatedAt).ToList();
+        var waiting = jobs.Where(j => j.Status == JobStatus.AwaitingApproval).OrderBy(j => j.CreatedAt).ToList();
+        var wanted = new List<Wanted>();
+        void Section(string key, string title, string colour, List<JobSummary> list)
+        {
+            if (list.Count == 0) return;
+            wanted.Add(new("h:" + key, title, () => (new TextBlock { Text = title, Style = Ui.Res<Style>("Eyebrow"), Foreground = Ui.Brush(colour), FontSize = 12, Margin = new Thickness(2, 4, 0, 8) }, null)));
+            foreach (var j in list)
+            {
+                bool busy = _busy.ContainsKey(j.JobId);
+                string? block = Block(j, s);
+                var stage = s.Current is { } c && c.JobId == j.JobId ? c.Stage : Stage.Idle;
+                var sig = $"{j.Status}|{busy}|{_confirmRetry == j.JobId}|{block}|{Offline}|{stage}|{j.DocumentName}|{j.AmountPaise}|{j.AttemptCount}|{j.ApprovalExpiresAt}";
+                wanted.Add(new(j.JobId.ToString(), sig, () => JobCard(j, busy, block, stage)));
+            }
+        }
+        Section("attention", attention.Count == 1 ? "NEEDS YOUR ATTENTION" : $"NEEDS YOUR ATTENTION  ·  {attention.Count}", "Err", attention);
+        Section("printing", printing.Any(j => j.Status == JobStatus.Printing) ? "PRINTING NOW" : "APPROVED", "Brand", printing);
+        Section("waiting", waiting.Count == 1 ? "WAITING FOR YOU" : $"WAITING FOR YOU  ·  {waiting.Count}", "Muted", waiting);
+        SyncList(Cards, _cardEntries, wanted, animate: true);
+        foreach (var e in _cardEntries.Values) e.Live?.Invoke(now);
+
+        bool empty = wanted.Count == 0;
+        EmptyState.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
+        if (empty) EmptyNote.Text = s.Queue is null && Offline
+            ? "Requests will show here as soon as AutoPrint can connect."
+            : $"New ones appear here by themselves{(_settings.SoundOn ? ", with a sound" : "")}.\nYour customers send files to shop code {_creds.ShopCode}.";
+        TabRequests.Content = waiting.Count + attention.Count > 0 ? $"Requests  ·  {waiting.Count + attention.Count}" : "Requests";
+        if (FinishedPane.IsVisible) RenderFinished();
+    }
+
+    private void SetStatus(bool? online, string text)
+    {
+        StatusText.Text = text;
+        StatusText.Foreground = Ui.Brush(online switch { true => "Ok", false => "Warn", _ => "Muted" });
+        Motion.Colour(_dot, ((SolidColorBrush)Ui.Brush(online switch { true => "Ok", false => "Warn", _ => "Line" })).Color);
+    }
+
+    /// <summary>Why this request cannot be approved right now, or null. Only things that are certain block: no printer
+    /// chosen, a printer that is gone, a print program or print record that is unusable. "Offline" according to
+    /// Windows never blocks; drivers get that wrong.</summary>
+    private string? Block(JobSummary j, AgentState s)
+    {
+        if (s.CannotPrint is not null || _health is { EngineOk: false }) return "This computer cannot print right now. See the message at the top.";
+        if (string.IsNullOrEmpty(_settings.PrinterFor(j.Color))) return "Choose a printer first (Settings).";
+        var h = j.Color && !string.IsNullOrEmpty(_settings.ColorPrinter) ? _health?.Colour : _health?.Bw;
+        return h is { Exists: false } ? "The printer for this request is not on this computer any more. Choose a printer in Settings." : null;
+    }
+
+    private List<Wanted> WantedBanners(AgentState s)
+    {
+        var list = new List<Wanted>();
+        void Add(string key, string kind, string text, string? button = null, Action? click = null) =>
+            list.Add(new(key, kind + text + button, () => (Banner(kind, text, button, click), null)));
+
+        if (Offline && (s.Problem is not null || s.LastPollAt is not null))
+            Add("offline", "Warn", "No internet connection. New requests will arrive by themselves when it is back. "
+                + (s.LastPollAt is { } at ? $"Last contact: {at.ToLocalTime():h:mm tt}." : "AutoPrint has not been able to connect yet."), "Try now", () => _agent?.Wake());
+        else if (s.Online && s.Problem is not null)
+            Add("problem", "Warn", "AutoPrint had a problem talking to its server. It is trying again by itself.");
+
+        if (s.CannotPrint is { } cannot) Add("record", "Err", cannot);
+        if (_health is { EngineOk: false })
+            Add("engine", "Err", "The part of AutoPrint that sends documents to the printer is missing or damaged (antivirus may have removed it). Nothing can be printed until AutoPrint is installed again.");
+
+        if (string.IsNullOrEmpty(_settings.BlackWhitePrinter))
+            Add("noprinter", "Warn", "No printer is chosen yet. Choose your printer before you approve requests.", "Choose printer", () => OnSettings(this, new RoutedEventArgs()));
+        foreach (var (h, what) in new[] { (_health?.Bw, "printer"), (_health?.Colour, "colour printer") })
+        {
+            if (h is null || h.Fine) continue;
+            if (!h.Exists)
+                Add("p:" + what, "Err", $"The {what} “{h.Name}” is not installed on this computer any more. Requests for it cannot be approved until you choose a printer.", "Choose printer", () => OnSettings(this, new RoutedEventArgs()));
+            else if (h.IsVirtual)
+                Add("p:" + what, "Warn", $"“{h.Name}” makes a file, not paper. Choose your real printer for customer prints.", "Choose printer", () => OnSettings(this, new RoutedEventArgs()));
+            else
+                Add("p:" + what, "Warn", $"Windows says the {what} “{h.Name}” " + (h.Paused ? "is paused. Resume it in Windows printer settings."
+                    : h.Offline ? "is offline. Check that it is switched on and connected." : h.Trouble + ".") + " You can still approve; check the printer first.");
+        }
+        if (_notice is { } n) Add("notice", "Info", n, "OK", () => { _notice = null; Render(); });
+        return list;
+    }
+
+    private static UIElement Banner(string kind, string text, string? button, Action? click)
+    {
+        var (soft, line, ink, glyph) = kind switch { "Err" => ("ErrSoft", "ErrLine", "Err", Ui.Warning), "Warn" => ("WarnSoft", "WarnLine", "Warn", Ui.Warning), _ => ("BrandSoft", "BrandLine", "Brand", Ui.Info) };
+        var row = new DockPanel();
+        var icon = Ui.Icon(glyph, ink); icon.Margin = new Thickness(0, 2, 10, 0); icon.VerticalAlignment = VerticalAlignment.Top;
+        row.Children.Add(icon);
+        if (button is not null)
+        {
+            var b = Ui.B(button); b.Margin = new Thickness(14, 0, 0, 0); b.VerticalAlignment = VerticalAlignment.Center; b.MinHeight = 32;
+            b.Click += (_, _) => click?.Invoke();
+            DockPanel.SetDock(b, Dock.Right); row.Children.Add(b);
+        }
+        var t = Ui.T(text); t.VerticalAlignment = VerticalAlignment.Center;
+        row.Children.Add(t);
+        return new Border { Style = Ui.Res<Style>("BannerBox"), Background = Ui.Brush(soft), BorderBrush = Ui.Brush(line), Child = row };
+    }
+
+    private void Notice(string text) { _notice = text; _noticeAt = Clock(); Render(); }
+
+    // ---------------------------------------------------------------- one request
+    private (UIElement, Action<DateTimeOffset>?) JobCard(JobSummary j, bool busy, string? block, Stage stage)
+    {
+        var body = new StackPanel();
+        var timing = j.Status == JobStatus.AwaitingApproval ? Ui.T("", "Soft") : null;
+        body.Children.Add(Head(j, timing));
+        Action<DateTimeOffset>? live = null;
+        string border = "Line";
+
         switch (j.Status)
         {
             case JobStatus.AwaitingApproval:
-                row.Children.Add(PreviewBtn(j, noPrinter));
-                row.Children.Add(Btn("Approve and print", () => _api!.ApproveAsync(j.JobId, _cts.Token), primary: true, enabled: !noPrinter));
-                row.Children.Add(Btn("Reject", () => _api!.RejectAsync(j.JobId, null, _cts.Token)));
+                live = now =>
+                {
+                    bool soon = JobText.ExpiresSoon(j, now);
+                    timing!.Text = JobText.Waiting(j, now) + (JobText.Expiry(j, now) is { } x ? "   ·   " + x : "");
+                    timing.Foreground = Ui.Brush(soon ? "Warn" : "Muted"); timing.FontWeight = soon ? FontWeights.SemiBold : FontWeights.Normal;
+                };
+                var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 12, 0, 0) };
+                bool can = !busy && !Offline;
+                buttons.Children.Add(AnswerButton("Reject", "Danger", can, j, guard: true, () => _api!.RejectAsync(j.JobId, null, _cts.Token)));
+                var preview = Ui.B("Preview"); preview.Margin = new Thickness(8, 0, 8, 0); preview.IsEnabled = can; preview.Click += (_, _) => OpenPreview(j, block);
+                buttons.Children.Add(preview);
+                buttons.Children.Add(AnswerButton("Approve and print", "Primary", can && block is null, j, guard: true, () => _api!.ApproveAsync(j.JobId, _cts.Token)));
+                // why a button is switched off is said in words, on its own line, right above the buttons
+                if ((busy ? "Sending your answer…" : Offline ? "No internet. You can answer when it is back." : block) is { } why)
+                {
+                    var note = Ui.T(why, "Soft", !busy && !Offline ? "Err" : null); note.TextAlignment = TextAlignment.Right; note.Margin = new Thickness(0, 12, 0, -4);
+                    body.Children.Add(note);
+                }
+                body.Children.Add(buttons);
                 break;
-            case JobStatus.Approved: row.Children.Add(new TextBlock { Text = "Approved. Waiting to print…", Foreground = Brushes.DimGray }); break;
-            case JobStatus.Printing: row.Children.Add(new TextBlock { Text = "Printing…", Foreground = Brushes.DimGray }); break;
+
+            case JobStatus.Printing:
+                border = "BrandLine";
+                var doing = Ui.T(stage switch { Stage.Claimed or Stage.Downloading => "Getting the file…", Stage.Printing => "Sending it to the printer…", Stage.Reporting => "Finishing…", _ => "The printer is working on it…" }, "Body", "Brand");
+                doing.FontWeight = FontWeights.SemiBold; doing.Margin = new Thickness(0, 14, 0, 0);
+                body.Children.Add(doing);
+                body.Children.Add(Motion.Progress());
+                break;
+
+            case JobStatus.Approved:
+                var next = Ui.T(block ?? "Approved. It prints as soon as the printer is free.", "Soft", block is null ? null : "Err"); next.Margin = new Thickness(0, 12, 0, 0);
+                body.Children.Add(next);
+                break;
+
             case JobStatus.NeedsAttention:
-                row.Children.Add(new TextBlock { Text = "Check the printer. We could not confirm this printed.", Foreground = Brushes.Firebrick, Margin = new Thickness(0, 0, 12, 0), VerticalAlignment = VerticalAlignment.Center });
-                row.Children.Add(Btn("It printed", () => _api!.ResolveAsync(j.JobId, Resolution.Completed, null, _cts.Token)));
-                row.Children.Add(Btn("It did not print", () => _api!.ResolveAsync(j.JobId, Resolution.Failed, null, _cts.Token)));
-                row.Children.Add(Btn("Print again", () => _api!.ResolveAsync(j.JobId, Resolution.Retry, null, _cts.Token)));
+                border = "ErrLine";
+                body.Children.Add(new Border { Height = 1, Background = Ui.Brush("Line"), Margin = new Thickness(0, 14, 0, 12) });
+                body.Children.Add(_confirmRetry == j.JobId ? ConfirmAgain(j, busy) : Choices(j, busy));
                 break;
         }
-        panel.Children.Add(row);
-        return new Border { Background = Brushes.White, CornerRadius = new CornerRadius(10), Padding = new Thickness(16), Margin = new Thickness(0, 0, 0, 10), Child = panel };
+        var card = new Border { Style = Ui.Res<Style>("CardBox"), BorderBrush = Ui.Brush(border), Child = body };
+        return (card, live);
     }
 
-    private Button PreviewBtn(JobSummary j, bool noPrinter)
+    /// <summary>The order code and the amount carry the card: they are what the customer says and what the shopkeeper collects.</summary>
+    private static UIElement Head(JobSummary j, TextBlock? timing)
     {
-        var b = new Button { Content = "Preview" };
-        b.Click += (_, _) =>
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition());
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var code = new StackPanel { Margin = new Thickness(0, 0, 22, 0), MinWidth = 96 };
+        code.Children.Add(Ui.T("ORDER CODE", "Eyebrow"));
+        code.Children.Add(Ui.T(j.OrderShortCode, "OrderCode"));
+        grid.Children.Add(code);
+
+        var mid = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        var name = Ui.T(j.DocumentName, "H2"); name.TextTrimming = TextTrimming.CharacterEllipsis; name.ToolTip = j.DocumentName;
+        mid.Children.Add(name);
+        // each fact is one piece; a narrow window moves whole facts to the next line, never half of one
+        var detail = new WrapPanel { Margin = new Thickness(0, 3, 0, 0) };
+        void Fact(string text, bool last = false, bool strong = false)
         {
-            var w = new PreviewWindow(j, _api!, App.Http, canDecide: !noPrinter) { Owner = this };
-            w.ShowDialog();
-            if (w.Decided) _agent?.Wake();
-        };
+            var t = new TextBlock { Foreground = Ui.Brush(strong ? "Brand" : "Ink"), FontWeight = strong ? FontWeights.SemiBold : FontWeights.Normal };
+            t.Inlines.Add(text);
+            if (!last) t.Inlines.Add(new Run("   ·   ") { Foreground = Ui.Brush("Muted"), FontWeight = FontWeights.Normal });
+            detail.Children.Add(t);
+        }
+        Fact(JobText.Pages(j)); Fact(JobText.Plural(j.Copies, "copy", "copies")); Fact(JobText.Colour(j), strong: j.Color); Fact(JobText.SidesChoice(j), last: true);
+        mid.Children.Add(detail);
+        var paper = Ui.T(JobText.PaperLine(j), "Soft"); paper.Margin = new Thickness(0, 2, 0, 0);
+        mid.Children.Add(paper);
+        if (timing is not null) { timing.Margin = new Thickness(0, 2, 0, 0); mid.Children.Add(timing); }
+        Grid.SetColumn(mid, 1); grid.Children.Add(mid);
+
+        var pay = new StackPanel { Margin = new Thickness(22, 0, 0, 0) };
+        var label = Ui.T("TO COLLECT", "Eyebrow"); label.HorizontalAlignment = HorizontalAlignment.Right;
+        pay.Children.Add(label);
+        pay.Children.Add(Ui.T(JobText.Money(j.AmountPaise), "Amount"));
+        Grid.SetColumn(pay, 2); grid.Children.Add(pay);
+        return grid;
+    }
+
+    private UIElement Choices(JobSummary j, bool busy)
+    {
+        var box = new StackPanel();
+        var lead = Ui.T("AutoPrint could not confirm that this came out of the printer. Look at the printer and its paper tray, then choose one.");
+        lead.FontWeight = FontWeights.SemiBold;
+        box.Children.Add(lead);
+        if (j.AttemptCount > 1) { var again = Ui.T($"This request has already been sent to the printer {j.AttemptCount} times.", "Soft", "Err"); again.Margin = new Thickness(0, 4, 0, 0); box.Children.Add(again); }
+        var three = new UniformGrid { Columns = 3, Margin = new Thickness(-6, 12, -6, 0) };
+        bool can = !busy && !Offline;
+        void Choice(string text, string caption, Button b)
+        {
+            var col = new StackPanel { Margin = new Thickness(6, 0, 6, 0) };
+            b.HorizontalAlignment = HorizontalAlignment.Stretch; col.Children.Add(b);
+            var c = Ui.T(caption, "Soft"); c.Margin = new Thickness(2, 6, 2, 0); col.Children.Add(c);
+            three.Children.Add(col);
+        }
+        Choice("It printed", "The pages are there. The customer collects them and pays.",
+            AnswerButton("It printed", null, can, j, guard: true, () => _api!.ResolveAsync(j.JobId, Resolution.Completed, null, _cts.Token)));
+        Choice("It did not print", "Nothing usable came out. The request is closed and the customer is told it failed.",
+            AnswerButton("It did not print", null, can, j, guard: true, () => _api!.ResolveAsync(j.JobId, Resolution.Failed, null, _cts.Token)));
+        var retry = Ui.B("Print again"); retry.IsEnabled = can && Block(j, _state) is null;
+        retry.Click += (_, _) => { if (Shifted()) return; _confirmRetry = j.JobId; Render(); };
+        Choice("Print again", "Sends the whole document to the printer one more time. You are asked to confirm.", retry);
+        box.Children.Add(three);
+        if (busy || Offline) { var n = Ui.T(busy ? "Sending your answer…" : "No internet. You can answer when it is back.", "Soft"); n.Margin = new Thickness(0, 10, 0, 0); box.Children.Add(n); }
+        return box;
+    }
+
+    private UIElement ConfirmAgain(JobSummary j, bool busy)
+    {
+        var box = new StackPanel();
+        var q = Ui.T("Print it again?"); q.FontWeight = FontWeights.SemiBold; q.FontSize = 16;
+        box.Children.Add(q);
+        var t = Ui.T($"All {JobText.Plural(JobText.Sides(j), "side", "sides")} will be sent to the printer one more time. First make sure the pages are not already in the tray: this really prints again.");
+        t.Margin = new Thickness(0, 4, 0, 12);
+        box.Children.Add(t);
+        var row = new StackPanel { Orientation = Orientation.Horizontal };
+        var yes = AnswerButton("Yes, print it again", "Primary", !busy && !Offline, j, guard: false, () => _api!.ResolveAsync(j.JobId, Resolution.Retry, null, _cts.Token));
+        var no = Ui.B("No, go back"); no.Margin = new Thickness(8, 0, 0, 0); no.Click += (_, _) => { _confirmRetry = null; Render(); };
+        row.Children.Add(yes); row.Children.Add(no);
+        box.Children.Add(row);
+        return new Border { Background = Ui.Brush("WarnSoft"), BorderBrush = Ui.Brush("WarnLine"), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(12), Padding = new Thickness(16, 14, 16, 14), Child = box };
+    }
+
+    /// <summary>True for a moment after the cards have moved: a click that lands then was aimed at whatever was there before.</summary>
+    private bool Shifted() => Clock() - _shiftedAt < TimeSpan.FromMilliseconds(450);
+
+    private Button AnswerButton(string text, string? style, bool enabled, JobSummary j, bool guard, Func<Task> call)
+    {
+        var b = Ui.B(text, style); b.IsEnabled = enabled;
+        b.Click += (_, _) => { if (!(guard && Shifted())) _ = Answer(j.JobId, call); };
         return b;
     }
 
-    private Button Btn(string text, Func<Task> action, bool primary = false, bool enabled = true)
+    /// <summary>Sends one answer for one request. A second click cannot send a second answer: the request stays
+    /// "busy" from the first click until the queue shows the result.</summary>
+    private async Task Answer(Guid jobId, Func<Task> call)
     {
-        var b = new Button { Content = text, IsEnabled = enabled };
-        if (primary) { b.Background = new SolidColorBrush(Color.FromRgb(29, 78, 216)); b.Foreground = Brushes.White; }
-        b.Click += async (_, _) =>
+        if (_api is null || _busy.ContainsKey(jobId)) return;
+        _busy[jobId] = null;
+        Render();
+        try { await call(); _busy[jobId] = DateTimeOffset.UtcNow; }
+        catch (Exception e)
         {
-            b.IsEnabled = false;                                  // no double clicks
-            try { await action(); _agent?.Wake(); }
-            catch (ServerUnreachableException) { ShowBanner("No connection. Try again in a moment."); b.IsEnabled = true; }
-            catch (ApiRejectedException ex) { ShowBanner(ex.Message); _agent?.Wake(); }
-        };
-        return b;
+            _busy.Remove(jobId);
+            if (e is OperationCanceledException) return;
+            if (e is not (ServerUnreachableException or ApiRejectedException)) App.Log("answer: " + SafeText.Describe(e));
+            Notice(e switch
+            {
+                ServerUnreachableException => "No internet connection, so that did not go through. Nothing was changed. Try again in a moment.",
+                ApiRejectedException { Code: "not_actionable" or "job_not_found" } => "That request has changed: the customer may have cancelled it, or it was already answered. Nothing was changed.",
+                ApiRejectedException { Code: "rate_limited" } => "Too many clicks in a short time. Wait a moment and try again.",
+                ApiRejectedException { Code: "contract_mismatch" } => "This version of AutoPrint is too old. Install the new version.",
+                ApiRejectedException x => x.Message,
+                _ => "That did not work. Try again.",
+            });
+        }
+        finally { if (_confirmRetry == jobId) _confirmRetry = null; _agent?.Wake(); Render(); }
     }
 
-    // ---------------------------------------------------------------- helpers
+    private void OpenPreview(JobSummary j, string? block)
+    {
+        if (_api is null || _preview is not null) return;
+        _preview = new PreviewWindow(j, _api, App.Http, block) { Owner = this };
+        try { _preview.ShowDialog(); }
+        finally
+        {
+            var choice = _preview.Choice; _preview = null;
+            if (choice == PreviewChoice.Approve) _ = Answer(j.JobId, () => _api!.ApproveAsync(j.JobId, _cts.Token));
+            else if (choice == PreviewChoice.Reject) _ = Answer(j.JobId, () => _api!.RejectAsync(j.JobId, null, _cts.Token));
+        }
+    }
+
+    // ---------------------------------------------------------------- finished: a lookup list, not a ledger
+    private void OnTab(object sender, RoutedEventArgs e)
+    {
+        if (FinishedPane is null) return;                          // raised once while the window is still being built
+        bool finished = TabFinished.IsChecked == true;
+        RequestsPane.Visibility = finished ? Visibility.Collapsed : Visibility.Visible;
+        FinishedPane.Visibility = finished ? Visibility.Visible : Visibility.Collapsed;
+        Motion.Fade(finished ? FinishedPane : RequestsPane);
+        if (finished) { _finishedShown = ""; RenderFinished(); }
+    }
+
+    private void OnSearch(object sender, TextChangedEventArgs e)
+    {
+        bool typed = SearchBox.Text.Length > 0;
+        SearchHint.Visibility = typed ? Visibility.Collapsed : Visibility.Visible;
+        SearchClear.Visibility = typed ? Visibility.Visible : Visibility.Collapsed;
+        RenderFinished();
+    }
+
+    private void OnSearchClear(object sender, RoutedEventArgs e) { SearchBox.Clear(); SearchBox.Focus(); }
+
+    private void RenderFinished()
+    {
+        var query = SearchBox.Text.Trim();
+        var jobs = _state.Queue?.Jobs ?? Array.Empty<JobSummary>();
+        // looking for a code finds it wherever the request is, so "where is my print?" always has an answer
+        var rows = jobs.Where(j => query.Length > 0 ? JobText.Matches(j, query) : !JobText.IsActive(j.Status))
+                       .OrderByDescending(j => j.CreatedAt).Take(60).ToList();
+        var now = ServerNow();
+        var sig = query + "|" + now.ToLocalTime().Date.DayOfYear + "|" + string.Join(",", rows.Select(j => $"{j.JobId:N}{(int)j.Status}"));
+        if (sig == _finishedShown) return;                         // a poll that changed nothing rebuilds nothing
+        _finishedShown = sig;
+        FinishedRows.Children.Clear();
+        FinishedBox.Visibility = rows.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        FinishedNote.Text = rows.Count > 0 ? (query.Length > 0 ? $"Orders that match “{query}”." : "Requests that ended in the last 24 hours, newest first. The time is when the customer sent it.")
+            : query.Length > 0 ? $"No order matches “{query}” in the last 24 hours. Check the code with the customer."
+            : "Nothing has finished in the last 24 hours.";
+        for (int i = 0; i < rows.Count; i++) FinishedRows.Children.Add(FinishedRow(rows[i], now, last: i == rows.Count - 1));
+    }
+
+    private static UIElement FinishedRow(JobSummary j, DateTimeOffset now, bool last)
+    {
+        var g = new Grid { Margin = new Thickness(0, 12, 0, 12) };
+        g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(92) });
+        g.ColumnDefinitions.Add(new ColumnDefinition());
+        g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto, MinWidth = 64 });
+        g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(176) });
+        var code = Ui.T(j.OrderShortCode, "OrderCode"); code.FontSize = 20; code.VerticalAlignment = VerticalAlignment.Center;
+        g.Children.Add(code);
+
+        var mid = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        var name = Ui.T(j.DocumentName); name.FontWeight = FontWeights.SemiBold; name.TextWrapping = TextWrapping.NoWrap; name.TextTrimming = TextTrimming.CharacterEllipsis; name.ToolTip = j.DocumentName;
+        mid.Children.Add(name);
+        var when = Ui.T($"{JobText.When(j.CreatedAt, now)}   ·   {JobText.Plural(JobText.Sides(j), "side", "sides")}", "Soft");
+        when.TextWrapping = TextWrapping.NoWrap; when.TextTrimming = TextTrimming.CharacterEllipsis;
+        mid.Children.Add(when);
+        Grid.SetColumn(mid, 1); g.Children.Add(mid);
+
+        var amount = Ui.T(JobText.Money(j.AmountPaise)); amount.FontSize = 17; amount.FontWeight = FontWeights.SemiBold; amount.HorizontalAlignment = HorizontalAlignment.Right; amount.VerticalAlignment = VerticalAlignment.Center; amount.Margin = new Thickness(12, 0, 0, 0);
+        Grid.SetColumn(amount, 2); g.Children.Add(amount);
+
+        var colour = j.Status switch { JobStatus.Completed => "Ok", JobStatus.Failed or JobStatus.NeedsAttention => "Err", JobStatus.AwaitingApproval or JobStatus.Approved or JobStatus.Printing => "Brand", _ => "Muted" };
+        var state = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
+        state.Children.Add(new System.Windows.Shapes.Ellipse { Width = 8, Height = 8, Fill = Ui.Brush(colour), Margin = new Thickness(0, 1, 7, 0), VerticalAlignment = VerticalAlignment.Center });
+        state.Children.Add(Ui.T(JobText.State(j.Status), "Body", colour));
+        Grid.SetColumn(state, 3); g.Children.Add(state);
+
+        return new Border { BorderBrush = Ui.Brush("Line"), BorderThickness = new Thickness(0, 0, 0, last ? 0 : 1), Child = g };
+    }
+
+    // ---------------------------------------------------------------- settings
     private void OnSettings(object sender, RoutedEventArgs e)
     {
-        var w = new SettingsWindow(_settings) { Owner = IsVisible ? this : null };
-        if (w.ShowDialog() == true) _agent?.Wake();
+        if (OwnedWindows.OfType<SettingsWindow>().Any()) return;
+        var w = new SettingsWindow(_settings, SupportInfo()) { Owner = IsVisible ? this : null };
+        w.ShowDialog();
+        _agent?.Wake(); Render(); _ = RefreshHealthAsync();          // also after Cancel: cheap, and the printer may have changed meanwhile
     }
 
-    private void ShowView(bool pair)
+    internal SupportInfo SupportInfo() => new(_version,
+        _creds is null ? "Not connected to a shop yet" : $"{ShopTitle.Text} ({_creds.ShopCode})",
+        _creds is null ? "Not connected" : _state.Online ? "Connected" + (_state.LastPollAt is { } at ? $". Last contact {at.ToLocalTime():h:mm:ss tt}" : "")
+            : "No internet" + (_state.LastPollAt is { } last ? $". Last contact {last.ToLocalTime():h:mm tt}" : ""));
+
+    // ---------------------------------------------------------------- for the UI self-test (fake data only)
+    internal void Demo(DeviceCredentials creds, AgentState state, Health? health, bool finishedTab = false, string search = "", Guid? confirm = null, string? notice = null)
     {
-        PairView.Visibility = pair ? Visibility.Visible : Visibility.Collapsed;
-        QueueView.Visibility = pair ? Visibility.Collapsed : Visibility.Visible;
-        SettingsButton.Visibility = pair ? Visibility.Collapsed : Visibility.Visible;
+        _state = state; _health = health; _confirmRetry = confirm; _notice = notice; _noticeAt = Clock();
+        ShowQueue(creds);
+        if (finishedTab) { TabFinished.IsChecked = true; SearchBox.Text = search; }
     }
-    private void SetDot(Brush b) => StatusDot.Fill = b;
-    private void ShowBanner(string? text) { Banner.Visibility = text is null ? Visibility.Collapsed : Visibility.Visible; BannerText.Text = text; }
+
+    internal void DemoPairing(string? code, TimeSpan left, bool offline)
+    {
+        ShowView(View.Pair);
+        PairStep3.Text = "Check the computer name (SHOP-PC) and press “Yes, connect it”.";
+        PairCode.Text = code ?? "····-····"; PairCode.Opacity = code is null ? 0.35 : 1;
+        PairNote.Text = code is null ? "No internet connection. Trying again in 6 s…"
+            : (offline ? "No internet connection. Trying again by itself. " : "Waiting for you to type the code. ") + $"It works for {(int)left.TotalMinutes}:{left.Seconds:00} more.";
+    }
 }
+
+public sealed record SupportInfo(string Version, string Shop, string Connection);

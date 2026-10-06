@@ -37,4 +37,8 @@ describe("details", () => {
   it("formats rupees", () => {
     expect([rupees(0), rupees(5), rupees(650), rupees(1200)]).toEqual(["₹0", "₹0.05", "₹6.50", "₹12"]);
   });
+  it("groups large amounts the Indian way, so a big job is read correctly", () => {
+    expect([rupees(99_900), rupees(100_000), rupees(123_450), rupees(30_000_000), rupees(1_234_567_800)])
+      .toEqual(["₹999", "₹1,000", "₹1,234.50", "₹3,00,000", "₹1,23,45,678"]);
+  });
 });

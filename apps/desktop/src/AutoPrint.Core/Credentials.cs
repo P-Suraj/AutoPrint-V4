@@ -24,13 +24,30 @@ public sealed class DpapiCredentialStore(string path) : ICredentialStore
     public static string DefaultPath() =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AutoPrintV4", "device.bin");
 
+    /// <summary>Null when this PC is not connected to a shop, or the saved connection is damaged (connect again).
+    /// A file that exists but cannot be READ right now (locked by antivirus or a backup) is different: that throws
+    /// after a few tries, so a working connection is never thrown away because of a passing lock.</summary>
     public DeviceCredentials? Load()
     {
-        if (!File.Exists(path)) return null;
+        byte[] bytes;
+        for (int attempt = 0; ; attempt++)
+        {
+            if (!File.Exists(path)) return null;
+            try { bytes = File.ReadAllBytes(path); break; }
+            catch (FileNotFoundException) { return null; }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                if (attempt >= 4) throw new IOException("The saved connection could not be read.", e);
+                Thread.Sleep(150);
+            }
+        }
         try
         {
-            var plain = ProtectedData.Unprotect(File.ReadAllBytes(path), Entropy, DataProtectionScope.CurrentUser);
-            return JsonSerializer.Deserialize<DeviceCredentials>(plain);
+            var c = JsonSerializer.Deserialize<DeviceCredentials>(ProtectedData.Unprotect(bytes, Entropy, DataProtectionScope.CurrentUser));
+            // a file that decrypts but is incomplete is as useless as a corrupt one
+            if (c is null || c.DeviceId == Guid.Empty || string.IsNullOrEmpty(c.DeviceSecret) || string.IsNullOrEmpty(c.ShopCode)
+                || !Uri.TryCreate(c.ApiBaseUrl, UriKind.Absolute, out _)) return null;
+            return c with { ShopName = string.IsNullOrEmpty(c.ShopName) ? c.ShopCode : c.ShopName };
         }
         catch (CryptographicException) { return null; }      // different Windows user or corrupt file: enrol again
         catch (JsonException) { return null; }

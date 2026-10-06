@@ -1,0 +1,19 @@
+{
+  "bw": {
+    "simplex": [
+      {"from_sides": 1, "to_sides": 20, "paise_per_side": 99900},
+      {"from_sides": 21, "to_sides": null, "paise_per_side": 99900}
+    ],
+    "duplex": [
+      {"from_sides": 1, "to_sides": null, "paise_per_side": 99900}
+    ]
+  },
+  "color": {
+    "simplex": [
+      {"from_sides": 1, "to_sides": null, "paise_per_side": 99900}
+    ],
+    "duplex": [
+      {"from_sides": 1, "to_sides": null, "paise_per_side": 99900}
+    ]
+  }
+}

@@ -31,6 +31,27 @@ public sealed class Journal : IDisposable
     private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("AutoPrint.V4.journal-token");
     private readonly string _cs;
 
+    /// <summary>
+    /// Opens the journal for the app. A journal file that is damaged beyond reading (a power cut, a failing disk) is
+    /// set aside under a new name and a fresh one is started, so the shop can keep working. That is safe: the server
+    /// turns every attempt this PC never settled into "needs attention" when its lease runs out, and nothing is
+    /// ever reprinted without a person choosing to. A journal that is only locked or unreachable still throws.
+    /// </summary>
+    public static Journal OpenOrSetAside(string path, Action<string>? log = null)
+    {
+        try { return new Journal(path); }
+        catch (SqliteException e) when (e.SqliteErrorCode is 11 or 26)          // SQLITE_CORRUPT, SQLITE_NOTADB
+        {
+            var aside = path + ".damaged-" + DateTime.Now.ToString("yyyyMMdd-HHmmss");
+            SqliteConnection.ClearAllPools();
+            File.Move(path, aside, overwrite: true);
+            foreach (var extra in new[] { path + "-wal", path + "-shm" })
+                try { File.Delete(extra); } catch (Exception x) when (x is IOException or UnauthorizedAccessException) { /* a fresh journal recreates them */ }
+            log?.Invoke($"print record was damaged (sqlite {e.SqliteErrorCode}); set aside as {Path.GetFileName(aside)} and started fresh");
+            return new Journal(path);
+        }
+    }
+
     public Journal(string path)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
@@ -48,9 +69,13 @@ public sealed class Journal : IDisposable
     private SqliteConnection Open()
     {
         var c = new SqliteConnection(_cs);
-        c.Open();
-        Exec(c, "PRAGMA synchronous=FULL;");
-        return c;
+        try
+        {
+            c.Open();
+            Exec(c, "PRAGMA synchronous=FULL;");
+            return c;
+        }
+        catch { c.Dispose(); throw; }          // a failed open must not keep the file locked (it could then not be set aside)
     }
 
     private static void Exec(SqliteConnection c, string sql, params (string, object)[] p)

@@ -1,18 +1,71 @@
 <Window x:Class="AutoPrint.Desktop.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Printers" Width="520" SizeToContent="Height" WindowStartupLocation="CenterScreen" ResizeMode="NoResize" FontFamily="Segoe UI" FontSize="14">
-    <StackPanel Margin="20">
-        <TextBlock Text="Black and white printer" FontWeight="SemiBold"/>
-        <ComboBox x:Name="BwBox" Margin="0,4,0,4" Padding="6"/>
-        <TextBlock x:Name="BwWarn" Foreground="Firebrick" TextWrapping="Wrap" Margin="0,0,0,12"/>
-        <TextBlock Text="Colour printer (optional)" FontWeight="SemiBold"/>
-        <ComboBox x:Name="ColorBox" Margin="0,4,0,16" Padding="6"/>
-        <CheckBox x:Name="StartupBox" Content="Start AutoPrint when I sign in to Windows" Margin="0,0,0,12"/>
-        <TextBlock x:Name="Result" Foreground="DimGray" TextWrapping="Wrap" Margin="0,0,0,12"/>
-        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-            <Button Content="Print a test page" Click="OnTest" Margin="0,0,8,0" Padding="14,7"/>
-            <Button Content="Save" Click="OnSave" IsDefault="True" Margin="0" Padding="22,7"/>
-        </StackPanel>
-    </StackPanel>
+        Title="AutoPrint settings" Width="560" SizeToContent="Height" WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+        Background="{StaticResource Bg}" Foreground="{StaticResource Ink}" FontFamily="Segoe UI" FontSize="14" UseLayoutRounding="True" SnapsToDevicePixels="True">
+    <DockPanel>
+        <Border DockPanel.Dock="Bottom" Background="{StaticResource Card}" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0" Padding="20,12">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                    <Button Content="Cancel" IsCancel="True" Margin="0,0,8,0"/>
+                    <Button Content="Save" Click="OnSave" IsDefault="True" Style="{StaticResource Primary}" MinHeight="38"/>
+                </StackPanel>
+                <TextBlock x:Name="SaveNote" Style="{StaticResource Soft}" Foreground="{StaticResource Err}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+            </DockPanel>
+        </Border>
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Focusable="False">
+            <StackPanel Margin="20,16,20,4">
+
+                <Border Style="{StaticResource CardBox}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource H2}" Text="Printer"/>
+                        <TextBlock Text="Printer for customer prints" FontWeight="SemiBold" Margin="0,12,0,4"/>
+                        <ComboBox x:Name="BwBox"/>
+                        <TextBlock x:Name="BwWarn" Style="{StaticResource Soft}" Margin="0,4,0,0" Visibility="Collapsed"/>
+                        <TextBlock Text="Colour printer, if it is a different one" FontWeight="SemiBold" Margin="0,12,0,4"/>
+                        <ComboBox x:Name="ColorBox"/>
+                        <DockPanel Margin="0,14,0,0">
+                            <Button x:Name="TestBtn" DockPanel.Dock="Left" Content="Print a test page" Click="OnTest"/>
+                            <TextBlock x:Name="Result" Style="{StaticResource Soft}" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                        </DockPanel>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource CardBox}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource H2}" Text="When a request arrives" Margin="0,0,0,12"/>
+                        <DockPanel>
+                            <Button DockPanel.Dock="Right" Style="{StaticResource Quiet}" Content="Hear it" Click="OnHear" VerticalAlignment="Top" Margin="8,-6,0,0"/>
+                            <CheckBox x:Name="SoundBox" Content="Play a sound, and again while a request is still waiting"/>
+                        </DockPanel>
+                        <CheckBox x:Name="StartupBox" Content="Start AutoPrint when I sign in to Windows" Margin="0"/>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource CardBox}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource H2}" Text="This computer" Margin="0,0,0,10"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="110"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0" Style="{StaticResource Soft}" Text="Shop" Margin="0,0,0,6"/>
+                            <TextBlock Grid.Row="0" Grid.Column="1" x:Name="ShopText" Style="{StaticResource Body}"/>
+                            <TextBlock Grid.Row="1" Style="{StaticResource Soft}" Text="Connection" Margin="0,0,0,6"/>
+                            <TextBlock Grid.Row="1" Grid.Column="1" x:Name="ConnText" Style="{StaticResource Body}"/>
+                            <TextBlock Grid.Row="2" Style="{StaticResource Soft}" Text="Computer name" Margin="0,0,0,6"/>
+                            <TextBlock Grid.Row="2" Grid.Column="1" x:Name="PcText" Style="{StaticResource Body}"/>
+                            <TextBlock Grid.Row="3" Style="{StaticResource Soft}" Text="Version"/>
+                            <TextBlock Grid.Row="3" Grid.Column="1" x:Name="VersionText" Style="{StaticResource Body}"/>
+                        </Grid>
+                        <Border Height="1" Background="{StaticResource Line}" Margin="0,14,0,12"/>
+                        <DockPanel>
+                            <Button DockPanel.Dock="Right" Content="Open the log folder" Click="OnLogFolder" VerticalAlignment="Top" Margin="12,0,0,0"/>
+                            <TextBlock Style="{StaticResource Soft}" VerticalAlignment="Center" Text="If support asks for the log, it is the file app.log in this folder."/>
+                        </DockPanel>
+                        <TextBlock x:Name="DisconnectText" Style="{StaticResource Soft}" Margin="0,12,0,0"/>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
 </Window>

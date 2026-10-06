@@ -45,6 +45,19 @@ F-1 isolated project and repo · F-2 first success target · F-3 web-only custom
 | O-9 | Multiple PDFs | ANSWERED: no multi-PDF UI for certification; schema supports many documents from day one |
 | O-10 | Unapproved job expiry | ANSWERED: customer can cancel before approval; unapproved jobs expire after a fixed 1-hour window, stored as `expires_at` on the order. No shop closing-time configuration in the MVP. |
 
+## Payments and print mode (founder, 6 October 2026)
+
+Decided by the founder for Phase 9. **Nothing here is built yet**; payment work starts only after the non-payment software is complete.
+
+| ID | Subject | Status |
+|---|---|---|
+| P-1 | Each shop receives its customers' payments directly, through its own payment-provider and KYC account. AutoPrint never collects or settles merchant funds | DECIDED 2026-10-06 |
+| P-2 | FinFlow owns the payment infrastructure and money movement and runs as a separate always-on service. No payment logic moves into AutoPrint (F-10 stands) | DECIDED 2026-10-06 |
+| P-3 | Manual approval is no longer the only mode (changes F-6). Each shop has two settings: **Online payments** ON/OFF and **Print mode** MANUAL/AUTO. Payments OFF: submit, then the normal shopkeeper approval. ON + MANUAL: the customer pays, the job is paid and ready, the shopkeeper approves, then it prints. ON + AUTO: once payment is confirmed server-side the job is authorised to print with no shopkeeper approval; the shopkeeper's job is to have the print ready before the customer arrives | DECIDED 2026-10-06 |
+| P-4 | The customer-facing payment success page is never proof of payment. Only FinFlow's server-side confirmation (webhook) is | DECIDED 2026-10-06 |
+| P-5 | Where FinFlow is hosted. It needs a JVM service, PostgreSQL, Redis and RabbitMQ; O-4 says free resources only | OPEN: founder to decide |
+| P-6 | Whether O-2 (no online payment before physical certification) still holds | ANSWERED 2026-10-06: the founder states that physical printing passed on a real printer ("I tried it out on a printer and it worked") and that nothing should be held back for it. Recorded on the founder's word: no results table, printer model, job count or failure drills are in the repository. Payment work is no longer blocked by certification; it still starts only after the non-payment build is complete |
+
 ## Resources (no secrets here)
 
 | Resource | Value | Verified |

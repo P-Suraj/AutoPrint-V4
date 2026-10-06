@@ -1,5 +1,5 @@
 // Small shared pieces of the interface: the brand mark, icons, and the touch-friendly controls.
-import { useId, type ReactNode } from "react";
+import { useId, type CSSProperties, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 
 type IconProps = { size?: number };
@@ -36,10 +36,12 @@ export function Segmented<T extends string>({ label, value, options, onChange }:
   label: string; value: T; options: { value: T; label: string; hint?: string }[]; onChange: (v: T) => void;
 }) {
   const name = useId();
+  // the white thumb slides to the chosen option (styles.css moves it with a transform, using these two numbers)
+  const thumb = { "--n": options.length, "--i": Math.max(0, options.findIndex((o) => o.value === value)) } as CSSProperties;
   return (
     <div className="field" role="radiogroup" aria-label={label}>
       <span className="field-label">{label}</span>
-      <div className="seg">
+      <div className="seg" style={thumb}>
         {options.map((o) => (
           <label key={o.value} className={o.value === value ? "on" : ""}>
             <input type="radio" name={name} checked={o.value === value} onChange={() => onChange(o.value)} />
@@ -62,7 +64,8 @@ export function Stepper({ label, value, min, max, onChange }: { label: string; v
       <div className="stepper">
         <button type="button" aria-label={`Fewer ${label.toLowerCase()}`} disabled={safe <= min} onClick={() => onChange(clamp(safe - 1))}>−</button>
         <input type="number" inputMode="numeric" aria-label={label} min={min} max={max} value={Number.isFinite(value) ? value : ""}
-               onChange={(e) => onChange(Math.trunc(Number(e.target.value)))} />
+               onChange={(e) => onChange(e.target.value.trim() === "" ? NaN : Math.trunc(Number(e.target.value)))}
+               onBlur={() => { if (!Number.isFinite(value) || value < min) onChange(min); else if (value > max) onChange(max); }} />
         <button type="button" aria-label={`More ${label.toLowerCase()}`} disabled={safe >= max} onClick={() => onChange(clamp(safe + 1))}>+</button>
       </div>
     </div>

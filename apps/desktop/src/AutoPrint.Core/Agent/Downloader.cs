@@ -13,14 +13,19 @@ public interface IDownloader
     Task DownloadAsync(string url, string expectedSha256, long expectedBytes, string path, CancellationToken ct);
 }
 
-public sealed class HttpDownloader(HttpClient http) : IDownloader
+/// <param name="limit">Longest a download may take, start to finish (default 4 minutes, inside the 5 minute lease).
+/// Without it a connection that stalls after the headers would hang the print queue for ever.</param>
+public sealed class HttpDownloader(HttpClient http, TimeSpan? limit = null) : IDownloader
 {
-    public async Task DownloadAsync(string url, string expectedSha256, long expectedBytes, string path, CancellationToken ct)
+    public async Task DownloadAsync(string url, string expectedSha256, long expectedBytes, string path, CancellationToken outer)
     {
         var part = path + ".part";
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(outer);
+        timeout.CancelAfter(limit ?? TimeSpan.FromMinutes(4));
+        var ct = timeout.Token;
         try
         {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             using var res = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
             if (!res.IsSuccessStatusCode) throw new DownloadFailedException($"download_http_{(int)res.StatusCode}");
             using var sha = SHA256.Create();
@@ -44,8 +49,10 @@ public sealed class HttpDownloader(HttpClient http) : IDownloader
                 throw new DownloadFailedException("download_sha256_mismatch");   // never print a file that is not the approved one
             File.Move(part, path, overwrite: true);
         }
+        catch (OperationCanceledException) when (outer.IsCancellationRequested) { throw; }          // the app is closing
+        catch (OperationCanceledException e) { throw new DownloadFailedException("download_timeout", e); }
         catch (HttpRequestException e) { throw new DownloadFailedException("download_unreachable", e); }
-        catch (IOException e) when (e is not FileNotFoundException) { throw new DownloadFailedException("download_io_error", e); }
-        finally { try { File.Delete(part); } catch (IOException) { /* best effort */ } }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { throw new DownloadFailedException("download_io_error", e); }
+        finally { try { File.Delete(part); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { /* best effort; the work folder is swept before the next job */ } }
     }
 }

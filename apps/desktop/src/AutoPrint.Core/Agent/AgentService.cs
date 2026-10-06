@@ -2,16 +2,25 @@ using AutoPrint.Core.Shop;
 
 namespace AutoPrint.Core.Agent;
 
+/// <param name="LastPollAt">Time of the last successful contact with the server (this PC's clock).</param>
+/// <param name="CannotPrint">Set when this PC must not print at all (its print record cannot be written). Approving is pointless until it clears.</param>
 public sealed record AgentState(
-    bool Online, bool NeedsPairing, QueueSnapshot? Queue, Activity? Current, string? Problem, DateTimeOffset? LastPollAt);
+    bool Online, bool NeedsPairing, QueueSnapshot? Queue, Activity? Current, string? Problem, DateTimeOffset? LastPollAt,
+    string? CannotPrint = null);
 
 /// <summary>
 /// Keeps the shop PC connected. One request every ~10 s does both heartbeat and queue refresh; approving a job
 /// wakes the loop at once, so "approve" feels instant instead of waiting for the next poll. It never exits on a
-/// network failure: it backs off and keeps trying (V3's agent died permanently if offline at boot).
+/// network failure or on a bug: it backs off and keeps trying (V3's agent died permanently if offline at boot).
+/// Printing runs beside the loop, not inside it, so the heartbeat and the queue keep refreshing during a long
+/// print (V3 showed the shop "offline" while it printed). Only one print runs at a time, and recovery of unsettled
+/// attempts runs only while nothing is printing.
 /// </summary>
 public sealed class AgentService
 {
+    public const string JournalFaultText =
+        "AutoPrint cannot write its print record on this computer, so nothing will be printed. Restart the computer. If this message stays, call support.";
+
     private readonly IShopApi _api;
     private readonly PrintOrchestrator _orchestrator;
     private readonly TimeSpan _pollEvery;
@@ -19,6 +28,7 @@ public sealed class AgentService
     private readonly Action<string>? _log;
     private readonly SemaphoreSlim _wake = new(0, 1);
     private readonly Random _rng = new();
+    private readonly object _gate = new();
     private AgentState _state = new(false, false, null, null, null, null);
 
     public event Action<AgentState>? StateChanged;
@@ -30,58 +40,108 @@ public sealed class AgentService
         _api = api; _orchestrator = orchestrator; _log = log;
         _pollEvery = pollEvery ?? TimeSpan.FromSeconds(10);
         _delay = delay ?? Task.Delay;
-        orchestrator.ActivityChanged += a => Publish(_state with { Current = a.Stage == Stage.Idle ? null : a });
+        orchestrator.ActivityChanged += a => Publish(s => s with { Current = a.Stage == Stage.Idle ? null : a });
     }
 
-    private void Publish(AgentState s) { _state = s; StateChanged?.Invoke(s); }
+    private void Log(string line) { try { _log?.Invoke(line); } catch (Exception) { /* logging must never stop the agent */ } }
 
-    /// <summary>Ask the loop to poll now (after the shopkeeper approved or resolved something).</summary>
+    /// <summary>The print worker and the poll loop both publish, so changes are applied one at a time, in order.</summary>
+    private void Publish(Func<AgentState, AgentState> change)
+    {
+        lock (_gate)
+        {
+            _state = change(_state);
+            try { StateChanged?.Invoke(_state); }
+            catch (Exception e) { Log("state listener failed: " + SafeText.Describe(e)); }
+        }
+    }
+
+    /// <summary>Ask the loop to poll now (after the shopkeeper approved or resolved something, or the network came back).</summary>
     public void Wake() { try { _wake.Release(); } catch (SemaphoreFullException) { /* already pending */ } }
 
     public async Task RunAsync(CancellationToken ct)
     {
         int failures = 0;
+        Task? printing = null;
         while (!ct.IsCancellationRequested)
         {
             try
             {
-                // every round, not only at start: an outcome that could not be delivered (offline at boot, or the
-                // network dropped during the report) is settled as soon as the server answers again
-                await _orchestrator.RecoverAsync(ct);
+                bool idle = printing is null || printing.IsCompleted;
+                // every idle round, not only at start: an outcome that could not be delivered (offline at boot, or the
+                // network dropped during the report) is settled as soon as the server answers again. Never while a
+                // print is running: the attempt in progress is "unreported" too, and must not be settled under it.
+                if (idle) { printing = null; await RecoverAsync(ct); }
                 var snap = await _api.PollAsync(ct);
                 failures = 0;
-                Publish(_state with { Online = true, NeedsPairing = false, Queue = snap, Problem = null, LastPollAt = snap.At });
+                Publish(s => s with { Online = true, NeedsPairing = false, Queue = snap, Problem = null, LastPollAt = snap.At });
 
-                // print everything that has been approved, one job at a time, then look again straight away
-                while (!ct.IsCancellationRequested && _state.Queue!.Jobs.Any(j => j.Status == JobStatus.Approved))
-                {
-                    var run = await _orchestrator.RunOnceAsync(ct);
-                    _log?.Invoke($"run: {run.Kind} {run.Reason}");
-                    snap = await _api.PollAsync(ct);
-                    Publish(_state with { Queue = snap, LastPollAt = snap.At });
-                    if (run.Kind == RunKind.NoJob) break;
-                }
+                if (idle && _state.CannotPrint is null && snap.Jobs.Any(j => j.Status == JobStatus.Approved))
+                    printing = PrintApprovedAsync(ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
             catch (ApiRejectedException e) when (e.IsAuthFailure)
             {
-                Publish(_state with { Online = true, NeedsPairing = true, Problem = "This PC is no longer authorised. Pair it again." });
+                Publish(s => s with { Online = true, NeedsPairing = true, Problem = "This PC is no longer authorised. Pair it again." });
                 failures = Math.Max(failures, 3);                         // check again, but slowly
             }
             catch (ServerUnreachableException)
             {
                 failures++;
-                Publish(_state with { Online = false, Problem = "No connection to AutoPrint. Retrying…" });
+                Publish(s => s with { Online = false, Problem = "No connection to AutoPrint. Retrying…" });
             }
-            catch (Exception e) when (e is not OperationCanceledException)
+            catch (Exception e)
             {
-                failures++;                                                // a bug must never stop the shop's PC
-                _log?.Invoke($"unexpected {e.GetType().Name}");
-                Publish(_state with { Problem = "Something went wrong. Retrying…" });
+                // A bug, or a timeout surfacing as a cancellation that nobody asked for, must never stop the shop's PC.
+                failures++;
+                Log("unexpected " + SafeText.Describe(e));
+                Publish(s => s with { Problem = "Something went wrong. Retrying…" });
             }
 
-            await WaitAsync(NextDelay(failures), ct);
+            try { await WaitAsync(NextDelay(failures), ct); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            catch (Exception e) { Log("wait failed: " + SafeText.Describe(e)); }
         }
+        if (printing is not null) { try { await printing; } catch (Exception) { /* it logs its own end */ } }
+    }
+
+    /// <summary>Settles attempts whose outcome never reached the server. A fault in the local print record does not
+    /// stop the heartbeat: it is shown to the shopkeeper and blocks printing until the record works again.</summary>
+    private async Task RecoverAsync(CancellationToken ct)
+    {
+        try
+        {
+            await _orchestrator.RecoverAsync(ct);
+            if (_state.CannotPrint is not null) Publish(s => s with { CannotPrint = null });
+        }
+        catch (Exception e) when (e is not (OperationCanceledException or ApiRejectedException or ServerUnreachableException))
+        {
+            Log("print record fault: " + SafeText.Describe(e));
+            Publish(s => s with { CannotPrint = JournalFaultText });
+        }
+    }
+
+    /// <summary>Prints everything that has been approved, one job at a time, and refreshes the queue after each.</summary>
+    private async Task PrintApprovedAsync(CancellationToken ct)
+    {
+        bool ran = false;
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                var run = await _orchestrator.RunOnceAsync(ct);
+                Log($"run: {run.Kind} {run.Reason}");
+                if (run.Reason == PrintOrchestrator.JournalUnavailable) { Publish(s => s with { CannotPrint = JournalFaultText }); break; }
+                if (run.Kind == RunKind.NoJob) break;
+                ran = true;
+                Wake();
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception e) { Log("print run stopped: " + SafeText.Describe(e)); }    // the journal keeps the attempt; the next idle round settles it
+        // Refresh at once only when a job really ran. An approved job the server will not hand out yet (another PC is
+        // printing, or its document is gone) is simply asked for again at the next normal poll, never in a tight loop.
+        finally { if (ran) Wake(); }
     }
 
     /// <summary>10 s normally; after failures 2, 4, 8, 16, 30, 60 s with a little jitter so shops do not all retry together.</summary>
@@ -100,5 +160,6 @@ public sealed class AgentService
         await Task.WhenAny(wake, timer);
         cts.Cancel();
         try { await Task.WhenAll(wake, timer); } catch (OperationCanceledException) { /* the loser was cancelled */ }
+        ct.ThrowIfCancellationRequested();
     }
 }

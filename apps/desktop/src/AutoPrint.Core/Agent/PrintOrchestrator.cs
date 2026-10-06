@@ -16,7 +16,8 @@ public sealed record OrchestratorOptions(
     TimeSpan? LeaseRenewEvery = null,
     TimeSpan? SpoolPoll = null,
     int ReportAttempts = 6,
-    TimeSpan? RetryDelay = null);
+    TimeSpan? RetryDelay = null,
+    TimeSpan? RenewBeforePrintAfter = null);
 
 /// <summary>
 /// One print job, start to finish. Order of events is the safety property (decision F-8):
@@ -28,9 +29,16 @@ public sealed class PrintOrchestrator(
     IShopApi api, IPrintEngine engine, ISpoolerObserver observer, Journal journal, IDownloader downloader,
     OrchestratorOptions options, Action<string>? log = null)
 {
+    /// <summary>Reason reported when the local print record cannot be written: the job is failed, never printed.</summary>
+    public const string JournalUnavailable = "journal_unavailable";
+
     public event Action<Activity>? ActivityChanged;
-    private void Emit(Stage s, Guid? job = null, string? detail = null) => ActivityChanged?.Invoke(new(s, job, detail));
-    private void Log(string m) => log?.Invoke(m);
+    private void Emit(Stage s, Guid? job = null, string? detail = null)
+    {
+        try { ActivityChanged?.Invoke(new(s, job, detail)); }
+        catch (Exception e) { Log("activity listener failed: " + SafeText.Describe(e)); }    // a display problem must not change what happens to a print
+    }
+    private void Log(string m) { try { log?.Invoke(m); } catch (Exception) { /* logging must never change the outcome of a print */ } }
 
     public async Task<RunResult> RunOnceAsync(CancellationToken ct)
     {
@@ -38,22 +46,45 @@ public sealed class PrintOrchestrator(
         if (claim is null) return new(RunKind.NoJob, null, "no_job");
 
         Emit(Stage.Claimed, claim.JobId);
+        var sinceClaim = System.Diagnostics.Stopwatch.StartNew();
         var printer = options.PrinterFor(claim.Options);
         var expected = PageRange.ExpectedPages(claim.Options, claim.PageCount);
-        journal.Begin(claim.AttemptId, claim.JobId, claim.SpoolerJobName, claim.AttemptToken, printer, expected);
         var file = Path.Combine(options.WorkDir, claim.SpoolerJobName + ".pdf");
         Log($"claimed job {Short(claim.JobId)}");
 
         try
         {
+            // One job at a time: anything still in the work folder belongs to a job that has ended (a crash, a power
+            // cut, a file that was locked when its job finished). No customer document stays on this PC.
+            WorkFiles.CleanStale(options.WorkDir);
+
             // ---- before anything is sent: any problem here is a clean failure ---------------------------------
+            // No journal, no print: the record must exist before the irreversible step, so without it the job fails.
+            try { journal.Begin(claim.AttemptId, claim.JobId, claim.SpoolerJobName, claim.AttemptToken, printer, expected); }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                Log("print record unavailable: " + SafeText.Describe(e));
+                return await ReportAsync(claim, Outcome.Failed, JournalUnavailable, null, ct);
+            }
+
             if (string.IsNullOrWhiteSpace(printer) || !observer.PrinterExists(printer))
                 return await ReportAsync(claim, Outcome.Failed, "printer_not_found", null, ct);
+            if (engine.NotReady() is { } notReady)
+                return await ReportAsync(claim, Outcome.Failed, notReady, null, ct);
 
             Emit(Stage.Downloading, claim.JobId);
             try { await downloader.DownloadAsync(claim.DownloadUrl, claim.Sha256, claim.Bytes, file, ct); }
             catch (DownloadFailedException e) { return await ReportAsync(claim, Outcome.Failed, e.Reason, null, ct); }
             journal.Advance(claim.AttemptId, AttemptState.Downloaded);
+
+            // A slow download can use up most of the lease. Printing on a lease the server has already given up
+            // would put paper out for a job it now shows as "needs attention", so check it is still ours first.
+            if (sinceClaim.Elapsed >= (options.RenewBeforePrintAfter ?? TimeSpan.FromSeconds(120)))
+            {
+                try { await api.RenewAsync(claim.AttemptId, claim.AttemptToken, 300, ct); }
+                catch (ApiRejectedException) { return await ReportAsync(claim, Outcome.Failed, "lease_lost_before_print", null, ct); }
+                catch (ServerUnreachableException) { return await ReportAsync(claim, Outcome.Failed, "offline_before_print", null, ct); }
+            }
 
             // ---- the irreversible step: record intent FIRST, then print ----------------------------------------
             journal.Advance(claim.AttemptId, AttemptState.Intent);
@@ -92,7 +123,9 @@ public sealed class PrintOrchestrator(
         }
         finally
         {
-            try { if (File.Exists(file)) File.Delete(file); } catch (IOException) { /* best effort; nothing sensitive is kept longer than needed */ }
+            // the print program can hold the file for a moment after it is stopped; whatever survives this is removed
+            // before the next job and at the next start (WorkFiles.CleanStale)
+            if (!await WorkFiles.DeleteAsync(file)) Log($"job {Short(claim.JobId)}: work file still locked; it is removed before the next job");
             Emit(Stage.Idle);
         }
     }
@@ -110,7 +143,7 @@ public sealed class PrintOrchestrator(
         {
             try { await api.MarkSentAsync(claim.AttemptId, claim.AttemptToken, ct); return; }
             catch (ServerUnreachableException) { await Task.Delay(Delay(i), ct); }
-            catch (ApiRejectedException e) when (e.IsStaleAttempt) { return; }     // the lease was lost; the report will say so
+            catch (ApiRejectedException) { return; }     // the lease was lost, or the server refused: keep watching, the report will say so
         }
     }
 
@@ -134,7 +167,7 @@ public sealed class PrintOrchestrator(
             try
             {
                 var status = await api.ReportOutcomeAsync(claim.AttemptId, claim.AttemptToken, outcome, wire, ct);
-                journal.MarkReported(claim.AttemptId, outcome.ToString());
+                MarkQuietly(claim.AttemptId, outcome.ToString());
                 Log($"job {Short(claim.JobId)} reported {outcome} ({reason}); server status {status}");
                 return new(ToKind(outcome), claim.JobId, reason);
             }
@@ -147,14 +180,26 @@ public sealed class PrintOrchestrator(
                     wire = (evidence ?? SpoolEvidence.None(0)).ToWire(reason);
                     continue;
                 }
-                journal.MarkReported(claim.AttemptId, "Stale");
+                MarkQuietly(claim.AttemptId, "Stale");
                 return new(RunKind.Uncertain, claim.JobId, "stale_attempt");
+            }
+            catch (ApiRejectedException)
+            {
+                _undelivered[claim.AttemptId] = (outcome, wire);            // refused for another reason (busy server, sign-in): keep what was seen
+                throw;
             }
             catch (ServerUnreachableException) { await Task.Delay(Delay(i), ct); }
         }
         _undelivered[claim.AttemptId] = (outcome, wire);
         Log($"job {Short(claim.JobId)}: outcome not delivered; will be settled when the server is reachable");
         return new(RunKind.Uncertain, claim.JobId, "report_undelivered");
+    }
+
+    /// <summary>The server has the outcome already; a failed local write only means recovery asks it once more.</summary>
+    private void MarkQuietly(Guid attemptId, string outcome)
+    {
+        try { journal.MarkReported(attemptId, outcome); }
+        catch (Exception e) { Log("print record not updated: " + SafeText.Describe(e)); }
     }
 
     /// <summary>Outcomes this run decided but could not deliver. Kept only in memory: after a restart the journal
@@ -188,6 +233,8 @@ public sealed class PrintOrchestrator(
                 _undelivered.Remove(e.AttemptId);
                 settled++;
             }
+            // "Not signed in" and "too many requests" say nothing about this attempt: keep it and let the caller react.
+            catch (ApiRejectedException x) when (x.IsAuthFailure || x.Code == "rate_limited") { throw; }
             catch (ApiRejectedException) { journal.MarkReported(e.AttemptId, "Stale"); _undelivered.Remove(e.AttemptId); settled++; }   // the server already decided
             catch (ServerUnreachableException) { /* still offline: try again next time */ }
         }

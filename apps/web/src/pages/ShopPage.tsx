@@ -2,49 +2,99 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ApiError, api, uploadPdf, type Schemas } from "../api";
-import { estimate, rupees, type Options } from "../estimate";
-import { PdfPreview, readPageCount } from "../preview";
-import { saveSecret } from "../store";
+import { estimate, rupees, type Options, type Rates } from "../estimate";
+import { YourOrders } from "../orders";
+import { PdfPreview, inspectPdf } from "../preview";
+import { clearDraft, loadDraft, loadSecret, rememberOrder, saveDraft, saveSecret } from "../store";
 import { rememberShop } from "../shopCode";
 import { Icon, Segmented, Stepper, Steps, TopBar, fileSize } from "../ui";
 
 const MAX_BYTES = 26_214_400;
 // answers that mean a kept draft order cannot take another file
 const ORDER_UNUSABLE = new Set(["order_not_found", "order_expired", "order_not_draft", "too_many_documents"]);
+// answers that mean the uploaded file is no longer there to be priced or sent (an unsent file is kept for an hour)
+const FILE_GONE = new Set(["order_not_found", "order_expired", "document_not_ready", "document_not_found"]);
+// with no price list from the server the settings can still be checked; the price then comes from the exact quote
+const NO_RATES: Rates = { bw: { simplex: [], duplex: [] }, color: { simplex: [], duplex: [] } };
 
-type Uploaded = { orderId: string; secret: string; documentId: string; pageCount: number; fileName: string };
+type Kept = { orderId: string; secret: string; shortCode: string };
+type Uploaded = Kept & { documentId: string; pageCount: number; fileName: string };
+type LoadError = { message: string; retry: boolean };
 
 function message(e: unknown): string {
   return e instanceof ApiError ? e.message : "Something went wrong. Please try again.";
 }
+const code = (e: unknown) => (e instanceof ApiError ? e.code : "");
 
+// A different shop code is a different visit: nothing chosen for one shop may leak into another.
 export default function ShopPage() {
   const { shopCode = "" } = useParams();
+  return <ShopFlow key={shopCode} shopCode={shopCode} />;
+}
+
+function ShopFlow({ shopCode }: { shopCode: string }) {
   const navigate = useNavigate();
+  // What this tab was doing before a refresh or the back button (see store.ts): the uploaded file is not asked for again.
+  const restored = useMemo(() => {
+    const d = loadDraft(shopCode);
+    const secret = d ? loadSecret(d.orderId) : null;
+    return d && secret ? { d, kept: { orderId: d.orderId, secret, shortCode: d.shortCode } } : null;
+  }, [shopCode]);
   const [shop, setShop] = useState<Schemas["ShopPublic"] | null>(null);
   const [rates, setRates] = useState<Schemas["RateCardPublic"] | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<LoadError | null>(null);
+  const [attempt, setAttempt] = useState(0);
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [up, setUp] = useState<Uploaded | null>(null);
-  const [opts, setOpts] = useState<Options>({ copies: 1, color: false, duplex: false, pageRange: null });
-  const [somePages, setSomePages] = useState(false);
+  const [up, setUp] = useState<Uploaded | null>(() => (restored?.d.documentId
+    ? { ...restored.kept, documentId: restored.d.documentId, pageCount: restored.d.pageCount, fileName: restored.d.fileName } : null));
+  const [opts, setOpts] = useState<Options>(() => (restored?.d.documentId
+    ? { copies: restored.d.copies, color: restored.d.color, duplex: restored.d.duplex, pageRange: restored.d.pageRange }
+    : { copies: 1, color: false, duplex: false, pageRange: null }));
+  const [somePages, setSomePages] = useState(() => !!restored?.d.documentId && restored.d.pageRange !== null);
   const [peek, setPeek] = useState(false);
   const [quote, setQuote] = useState<Schemas["QuoteResponse"] | null>(null);
-  const draft = useRef<{ shopCode: string; order: Schemas["CreateOrderResponse"] } | null>(null);
+  const draft = useRef<Kept | null>(restored?.kept ?? null);
+  const working = useRef(false);            // one action at a time, however fast the button is tapped
 
   useEffect(() => {
     let alive = true;
+    setLoadError(null);
     Promise.all([api.getShop(shopCode), api.getRates(shopCode).catch(() => null)])
       .then(([s, r]) => { if (alive) { setShop(s); setRates(r); rememberShop({ code: s.code, name: s.name }); } })
-      .catch((e) => alive && setLoadError(message(e)));
+      .catch((e) => alive && setLoadError({ message: message(e), retry: code(e) !== "shop_not_found" }));
     return () => { alive = false; };
-  }, [shopCode]);
+  }, [shopCode, attempt]);
 
-  const est = useMemo(() => (up && rates ? estimate(up.pageCount, opts, rates) : null), [up, rates, opts]);
+  function startOver(why: string | null) {
+    clearDraft(); draft.current = null;
+    setUp(null); setQuote(null); setFile(null); setPeek(false); setError(why);
+  }
+
+  // A restored file is shown at once and checked in the background: if the server no longer has it, say so.
+  useEffect(() => {
+    if (!restored?.d.documentId) return;
+    let alive = true;
+    api.getOrder(restored.kept.orderId, restored.kept.secret)
+      .then((o) => { if (alive && o.status !== "draft") startOver(null); })
+      .catch((e) => { if (alive && code(e) === "order_not_found") startOver("Your file is no longer kept. Please choose it again."); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restored]);
+
+  // Remember where this tab is, for a refresh.
+  useEffect(() => {
+    const kept = up ?? draft.current;
+    if (!kept) return;
+    saveDraft({ shopCode, orderId: kept.orderId, shortCode: kept.shortCode, documentId: up?.documentId ?? null, pageCount: up?.pageCount ?? 0,
+      fileName: up?.fileName ?? "", copies: Number.isFinite(opts.copies) ? opts.copies : 1, color: opts.color, duplex: opts.duplex, pageRange: opts.pageRange });
+  }, [shopCode, up, opts]);
+
+  const check = useMemo(() => (up ? estimate(up.pageCount, opts, rates ?? NO_RATES) : null), [up, rates, opts]);
+  const est = rates ? check : null;
   // what the whole job would cost with one setting changed, shown under each choice
   const priceWith = (change: Partial<Options>): string | undefined => {
     if (!up || !rates) return undefined;
@@ -52,78 +102,99 @@ export default function ShopPage() {
     return e.ok ? rupees(e.amountPaise) : undefined;
   };
 
-  async function choose(f: File | null) {
+  function choose(f: File | null) {
     setError(null); setUp(null); setQuote(null); setFile(null);
     if (!f) return;
     if (f.type !== "application/pdf" && !f.name.toLowerCase().endsWith(".pdf")) { setError("Only PDF files can be printed."); return; }
+    if (f.size === 0) { setError("This file is empty. Choose another PDF."); return; }
     if (f.size > MAX_BYTES) { setError("The file is larger than 25 MB."); return; }
     setFile(f);
   }
 
   function drop(e: DragEvent) {
     e.preventDefault(); setDragging(false);
-    if (!busy) void choose(e.dataTransfer.files?.[0] ?? null);
+    if (!busy) choose(e.dataTransfer.files?.[0] ?? null);
   }
 
-  async function upload() {
+  /** Runs one step of the flow; a second tap while it runs does nothing. */
+  async function step(label: string, work: () => Promise<void>) {
+    if (working.current) return;
+    working.current = true;
+    setError(null); setBusy(label);
+    try { await work(); } catch (e) {
+      if (FILE_GONE.has(code(e)) && up) startOver("Your file is no longer kept. Please choose it again.");
+      else setError(message(e));
+    } finally { working.current = false; setBusy(null); setProgress(null); }
+  }
+
+  const upload = () => step("Checking your file…", async () => {
     if (!file) return;
-    setError(null);
-    try {
-      setBusy("Checking your file…");
-      const pageCount = await readPageCount(file).catch(() => 0);
-      if (pageCount < 1) throw new ApiError("pdf_unreadable", "This PDF could not be read. Try saving or exporting it again.");
-      // One order per visit: trying again after a failed upload reuses it instead of starting (and counting) a new one.
-      const doc = { file_name: file.name, byte_size: file.size, content_type: "application/pdf" };
-      let order = draft.current?.shopCode === shopCode ? draft.current.order : null;
-      let reg: Schemas["RegisterDocumentResponse"] | null = null;
-      if (order) {
-        setBusy("Uploading…");
-        try { reg = await api.registerDocument(order.order_id, order.order_secret, doc); }
-        catch (e) {
-          if (!(e instanceof ApiError) || !ORDER_UNUSABLE.has(e.code)) throw e;
-          order = null;                                           // the kept order ran out: start a fresh one below
-        }
-      }
-      if (!order) {
-        setBusy("Starting your order…");
-        order = await api.createOrder(shopCode);
-        draft.current = { shopCode, order };
-        saveSecret(order.order_id, order.order_secret);
-      }
+    const seen = await inspectPdf(file);
+    if (seen.kind === "encrypted") throw new ApiError("pdf_encrypted", "This PDF is password-protected. Remove the password and try again.");
+    if (seen.kind === "invalid") throw new ApiError("pdf_unreadable", "This PDF could not be read. Try saving or exporting it again.");
+    // ("unknown" goes on: this browser could not read PDFs at all, and the server checks every file anyway.)
+    // One order per visit: trying again after a failed upload reuses it instead of starting (and counting) a new one.
+    const doc = { file_name: file.name.slice(0, 255), byte_size: file.size, content_type: "application/pdf" };
+    let order = draft.current;
+    let reg: Schemas["RegisterDocumentResponse"] | null = null;
+    if (order) {
       setBusy("Uploading…");
-      reg ??= await api.registerDocument(order.order_id, order.order_secret, doc);
-      setProgress(0);
-      await uploadPdf(reg.upload_url, reg.upload_headers, file, setProgress);
-      setProgress(1);
-      setBusy("Checking the upload…");
-      const fin = await api.finalizeDocument(order.order_id, reg.document_id, order.order_secret);
-      setUp({ orderId: order.order_id, secret: order.order_secret, documentId: reg.document_id, pageCount: fin.page_count, fileName: file.name });
-    } catch (e) { setError(message(e)); } finally { setBusy(null); setProgress(null); }
-  }
+      try { reg = await api.registerDocument(order.orderId, order.secret, doc); }
+      catch (e) {
+        if (!ORDER_UNUSABLE.has(code(e))) throw e;
+        order = null;                                           // the kept order ran out: start a fresh one below
+      }
+    }
+    if (!order) {
+      setBusy("Starting your order…");
+      const made = await api.createOrder(shopCode);
+      order = draft.current = { orderId: made.order_id, secret: made.order_secret, shortCode: made.short_code };
+      saveSecret(order.orderId, order.secret);
+      saveDraft({ shopCode, ...order, documentId: null, pageCount: 0, fileName: "", copies: 1, color: false, duplex: false, pageRange: null });
+    }
+    setBusy("Uploading…");
+    reg ??= await api.registerDocument(order.orderId, order.secret, doc);
+    setProgress(0);
+    await uploadPdf(reg.upload_url, reg.upload_headers, file, setProgress);
+    setProgress(1);
+    setBusy("Checking the upload…");
+    const fin = await api.finalizeDocument(order.orderId, reg.document_id, order.secret);
+    setUp({ ...order, documentId: reg.document_id, pageCount: fin.page_count, fileName: file.name });
+  });
 
-  async function seePrice() {
+  const seePrice = () => step("Calculating the price…", async () => {
     if (!up) return;
-    setError(null); setBusy("Calculating the price…");
-    try {
-      setQuote(await api.createQuote(up.orderId, up.secret, {
-        items: [{ document_id: up.documentId, options: { copies: opts.copies, color: opts.color, duplex: opts.duplex, page_range: opts.pageRange?.trim() || null } }],
-      }));
-    } catch (e) { setError(message(e)); } finally { setBusy(null); }
-  }
+    setQuote(await api.createQuote(up.orderId, up.secret, {
+      items: [{ document_id: up.documentId, options: { copies: opts.copies, color: opts.color, duplex: opts.duplex, page_range: opts.pageRange?.trim() || null } }],
+    }));
+  });
 
-  async function send() {
+  const send = () => step("Sending to the shop…", async () => {
     if (!up || !quote) return;
-    setError(null); setBusy("Sending to the shop…");
-    try {
-      await api.submitOrder(up.orderId, up.secret, quote.quote_id);
-      navigate(`/o/${up.orderId}`);
-    } catch (e) { setError(message(e)); setBusy(null); }
+    try { await api.submitOrder(up.orderId, up.secret, quote.quote_id); }
+    catch (e) {
+      if (code(e) === "quote_not_found") setQuote(null);
+      // "already submitted" means an earlier tap did reach the shop although its answer never arrived: show that order
+      if (code(e) !== "order_not_draft") throw e;
+    }
+    clearDraft();
+    rememberOrder({ id: up.orderId, code: up.shortCode, shopCode, shopName: shop?.name ?? shopCode });
+    navigate(`/o/${up.orderId}`);
+  });
+
+  if (loadError) {
+    return (
+      <main><TopBar /><div className="card center">
+        <h1>AutoPrint</h1><p role="alert" className="error">{loadError.message}</p>
+        {loadError.retry && <button className="primary" onClick={() => setAttempt((n) => n + 1)}>Try again</button>}
+        <a className="button" href="/">{loadError.retry ? "Type a shop code" : "Try another shop code"}</a>
+      </div></main>
+    );
   }
+  if (!shop) return <main aria-busy="true"><TopBar /><div className="skeleton head-shape" /><div className="skeleton steps-shape" /><div className="skeleton drop-shape" /><p className="sr-only">Loading…</p></main>;
+  if (!shop.accepting_orders) return <main><TopBar /><div className="card center"><h1>{shop.name}</h1><p role="alert" className="error">This shop is not taking orders right now.</p><a className="button" href="/">Try another shop code</a></div></main>;
 
-  if (loadError) return <main><TopBar /><div className="card center"><h1>AutoPrint</h1><p role="alert" className="error">{loadError}</p><a className="button" href="/">Try another shop code</a></div></main>;
-  if (!shop) return <main aria-busy="true"><TopBar /><div className="skeleton title" /><div className="skeleton block" /><p className="sr-only">Loading…</p></main>;
-  if (!shop.accepting_orders) return <main><TopBar /><div className="card center"><h1>{shop.name}</h1><p role="alert" className="error">This shop is not taking orders right now.</p></div></main>;
-
+  const percent = progress === null ? null : Math.round(progress * 100);
   return (
     <main className={up ? "with-bar" : ""}>
       <TopBar />
@@ -141,24 +212,26 @@ export default function ShopPage() {
         <section className="rise">
           <label className={`drop${file ? " has" : ""}${dragging ? " over" : ""}`}
                  onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={drop}>
-            <input type="file" accept="application/pdf,.pdf" onChange={(e) => choose(e.target.files?.[0] ?? null)} disabled={!!busy} />
+            <input type="file" accept="application/pdf,.pdf" aria-label="Choose a PDF to print" onChange={(e) => choose(e.target.files?.[0] ?? null)} disabled={!!busy} />
             <span className="drop-icon">{file ? <Icon.file size={28} /> : <Icon.upload size={28} />}</span>
             {file
               ? <><strong className="ellipsis">{file.name}</strong><small>{fileSize(file.size)} · tap to choose another</small></>
               : <><strong>Choose a PDF</strong><small>Tap to pick a file from your phone</small></>}
           </label>
+          {error && <p role="alert" className="error">{error}</p>}
           {file && <PdfPreview file={file} />}
           {file && (
             <button className="primary big" onClick={upload} disabled={!!busy}>
-              {busy ? <><i className="spinner" />{busy}</> : <>Continue<Icon.arrow size={20} /></>}
+              {busy ? <><i className="spinner" />{busy}{percent !== null && percent < 100 ? ` ${percent}%` : ""}</> : <>Continue<Icon.arrow size={20} /></>}
             </button>
           )}
-          {progress !== null && <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress * 100)}><i style={{ width: `${Math.round(progress * 100)}%` }} /></div>}
+          {percent !== null && <div className="progress" role="progressbar" aria-label="Upload" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}><i style={{ transform: `scaleX(${progress})` }} /></div>}
           {!file && !error && <p className="hint">No app and no account. You see the price before anything is sent.</p>}
+          {!file && <YourOrders shopCode={shopCode} />}
         </section>
       )}
 
-      {up && file && (
+      {up && (
         <section className="rise">
           <div className="card filecard">
             <span className="file-badge"><Icon.file size={22} /></span>
@@ -168,11 +241,14 @@ export default function ShopPage() {
             </div>
             <span className="tick"><Icon.check size={16} /></span>
           </div>
-          {/* rendered only once opened: the preview sizes itself to the space it is given */}
-          <details className="peek" onToggle={(e) => setPeek(e.currentTarget.open)}><summary>Look at the file</summary>{peek && <PdfPreview file={file} />}</details>
+          <div className="file-actions">
+            {/* rendered only once opened: the preview sizes itself to the space it is given */}
+            {file && <details className="peek" onToggle={(e) => setPeek(e.currentTarget.open)}><summary>Look at the file</summary>{peek && <PdfPreview file={file} />}</details>}
+            <button className="link" onClick={() => { const kept = draft.current; startOver(null); draft.current = kept; }} disabled={!!busy}>Choose another file</button>
+          </div>
 
-          <fieldset className="card options" disabled={!!busy || !!quote}>
-            <legend>Print settings</legend>
+          <fieldset className="card options" disabled={!!busy || !!quote} aria-labelledby="print-settings">
+            <h2 id="print-settings">Print settings</h2>
             <Segmented label="Colour" value={opts.color ? "color" : "bw"} onChange={(v) => setOpts({ ...opts, color: v === "color" })}
                        options={[{ value: "bw", label: "Black & white", hint: priceWith({ color: false }) }, { value: "color", label: "Colour", hint: priceWith({ color: true }) }]} />
             <Segmented label="Sides" value={opts.duplex ? "duplex" : "simplex"} onChange={(v) => setOpts({ ...opts, duplex: v === "duplex" })}
@@ -196,10 +272,11 @@ export default function ShopPage() {
             {!quote ? (
               <>
                 <div className="bar-price">
-                  {est && !est.ok && <p role="alert" className="error">{est.code === "invalid_page_range" ? "Check the page range." : "Copies must be between 1 and 100."}</p>}
-                  {est?.ok && <p className="estimate">About <strong>{rupees(est.amountPaise)}</strong> <small>({est.printedSides} sides × {rupees(est.paisePerSide)})</small></p>}
+                  {check && !check.ok && <p role="alert" className="error">{check.code === "invalid_page_range" ? `Check the page range: this file has ${up.pageCount} ${up.pageCount === 1 ? "page" : "pages"}.` : "Copies must be between 1 and 100."}</p>}
+                  {est?.ok && <p className="estimate">About <strong key={est.amountPaise} className="swap">{rupees(est.amountPaise)}</strong> <small>({est.printedSides} sides × {rupees(est.paisePerSide)})</small></p>}
+                  {!rates && check?.ok && <p className="meta">The price is shown in the next step.</p>}
                 </div>
-                <button className="primary" onClick={seePrice} disabled={!!busy || !est?.ok}>{busy ? <><i className="spinner" />{busy}</> : "See exact price"}</button>
+                <button className="primary" onClick={seePrice} disabled={!!busy || !check?.ok}>{busy ? <><i className="spinner" />{busy}</> : "See exact price"}</button>
               </>
             ) : (
               <div className="quote rise" aria-live="polite">
@@ -214,8 +291,6 @@ export default function ShopPage() {
           </div>
         </section>
       )}
-
-      {!up && error && <p role="alert" className="error">{error}</p>}
     </main>
   );
 }

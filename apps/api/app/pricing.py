@@ -70,6 +70,8 @@ def validate_rules(rules: dict) -> None:
                 raise PricingError(f"Rate card {color}.{sides} needs at least one slab", "no_rate_card")
             expected_from = 1
             for i, slab in enumerate(slabs):
+                if not isinstance(slab, dict):
+                    raise PricingError(f"Rate card {color}.{sides} slab {i + 1} must be an object", "no_rate_card")
                 lo, hi, rate = slab.get("from_sides"), slab.get("to_sides"), slab.get("paise_per_side")
                 if not (isinstance(lo, int) and isinstance(rate, int)) or isinstance(lo, bool) or isinstance(rate, bool):
                     raise PricingError(f"Rate card {color}.{sides} slab {i + 1} must use whole numbers", "no_rate_card")

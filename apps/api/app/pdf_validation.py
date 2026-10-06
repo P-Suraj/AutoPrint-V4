@@ -15,7 +15,6 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from dataclasses import dataclass
 
 from pypdf import PdfReader
-from pypdf.errors import PdfReadError
 
 MAX_PAGES = 2000
 TIMEOUT_SECONDS = 15.0
@@ -74,7 +73,10 @@ def _inspect(data: bytes) -> PdfInfo:
         return PdfInfo(page_count=count)
     except PdfRejected:
         raise
-    except (PdfReadError, KeyError, ValueError, TypeError, AttributeError, RecursionError, OSError):
+    except Exception:
+        # Whatever the parser trips over, the answer for the customer is the same: this file cannot be read.
+        # A list of known error types was not enough: a damaged page tree raises pypdf's LimitReachedError, which
+        # is not a PdfReadError, and it surfaced as HTTP 500 with the document stuck in "pending" for good.
         raise PdfRejected("pdf_unreadable") from None
 
 

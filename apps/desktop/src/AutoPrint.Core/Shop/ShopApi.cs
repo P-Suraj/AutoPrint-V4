@@ -67,8 +67,9 @@ public sealed class ShopApi : IShopApi
     {
         using var r = Req(HttpMethod.Get, "/jobs");
         r.Headers.Add("X-Agent-Version", _version);
-        var res = await SendAsync<JobListResponse>(_http, r, ct);
-        return new QueueSnapshot(res.ShopCode, res.ShopName, res.Jobs, DateTimeOffset.UtcNow);
+        DateTimeOffset? serverNow = null;
+        var res = await SendAsync<JobListResponse>(_http, r, ct, reply => serverNow = reply.Headers.Date);
+        return new QueueSnapshot(res.ShopCode, res.ShopName, res.Jobs, DateTimeOffset.UtcNow, serverNow);
     }
 
     public async Task ApproveAsync(Guid jobId, CancellationToken ct)
@@ -102,19 +103,25 @@ public sealed class ShopApi : IShopApi
     public async Task<JobStatus> ReportOutcomeAsync(Guid attemptId, string token, Outcome outcome, IDictionary<string, object?> evidence, CancellationToken ct)
     { using var r = Req(HttpMethod.Post, $"/attempts/{attemptId}/outcome", new OutcomeRequest(token, outcome, evidence)); return (await SendAsync<OutcomeResponse>(_http, r, ct)).JobStatus; }
 
-    private static async Task<T> SendAsync<T>(HttpClient http, HttpRequestMessage req, CancellationToken ct)
+    private static async Task<T> SendAsync<T>(HttpClient http, HttpRequestMessage req, CancellationToken ct, Action<HttpResponseMessage>? onReply = null)
     {
         HttpResponseMessage res;
         try { res = await http.SendAsync(req, ct); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or IOException)
+        catch (Exception e) when (e is HttpRequestException or OperationCanceledException or IOException)
         { throw new ServerUnreachableException("Could not reach AutoPrint.", e); }
 
         using (res)
         {
             if (res.IsSuccessStatusCode)
             {
-                var body = await res.Content.ReadFromJsonAsync<T>(Wire.Json, ct);
+                onReply?.Invoke(res);
+                T? body;
+                try { body = await res.Content.ReadFromJsonAsync<T>(Wire.Json, ct); }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                // a Wi-Fi sign-in page or a proxy answers "200 OK" with something that is not ours: that is "no connection"
+                catch (Exception e) when (e is JsonException or NotSupportedException or IOException or HttpRequestException or OperationCanceledException)
+                { throw new ServerUnreachableException("The reply did not come from AutoPrint.", e); }
                 return body ?? throw new ServerUnreachableException("The server sent an empty reply.");
             }
             if ((int)res.StatusCode >= 500)

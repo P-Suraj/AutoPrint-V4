@@ -32,7 +32,7 @@ public static class Pairing
 
     /// <summary>Polls every few seconds until the founder approves, the code expires, or the user cancels.</summary>
     public static async Task<DeviceCredentials?> WaitForApprovalAsync(
-        HttpClient http, PairingSession s, TimeSpan? every, CancellationToken ct)
+        HttpClient http, PairingSession s, TimeSpan? every, CancellationToken ct, Action<bool>? reachable = null)
     {
         var step = every ?? TimeSpan.FromSeconds(3);
         while (!ct.IsCancellationRequested)
@@ -40,10 +40,12 @@ public static class Pairing
             try
             {
                 var r = await PollOnceAsync(http, s, ct);
-                if (r.Status == "approved") return new DeviceCredentials(r.DeviceId!.Value, s.DeviceSecret, r.ShopCode!, r.ShopName ?? r.ShopCode!, s.ApiBaseUrl);
+                reachable?.Invoke(true);
+                if (r.Status == "approved" && r.DeviceId is { } id && !string.IsNullOrEmpty(r.ShopCode))
+                    return new DeviceCredentials(id, s.DeviceSecret, r.ShopCode, r.ShopName ?? r.ShopCode, s.ApiBaseUrl);
                 if (r.Status == "expired") return null;
             }
-            catch (ServerUnreachableException) { /* offline: keep waiting; the code stays valid for 15 minutes */ }
+            catch (ServerUnreachableException) { reachable?.Invoke(false); /* offline: keep waiting; the code stays valid for 15 minutes */ }
             await Task.Delay(step, ct);
         }
         return null;
@@ -54,10 +56,14 @@ public static class Pairing
         try
         {
             using var res = await http.PostAsJsonAsync(baseUrl.TrimEnd('/') + path, body, Wire.Json, ct);
-            if (res.IsSuccessStatusCode) return (await res.Content.ReadFromJsonAsync<TRes>(Wire.Json, ct))!;
+            if (res.IsSuccessStatusCode)
+                return await res.Content.ReadFromJsonAsync<TRes>(Wire.Json, ct) ?? throw new ServerUnreachableException("The server sent an empty reply.");
             if ((int)res.StatusCode >= 500) throw new ServerUnreachableException($"The server had a problem (HTTP {(int)res.StatusCode}).");
             throw new ApiRejectedException("unknown", "The request was refused.", res.StatusCode);
         }
-        catch (HttpRequestException e) { throw new ServerUnreachableException("Could not reach AutoPrint.", e); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        // a timeout arrives as a cancellation nobody asked for; a Wi-Fi sign-in page arrives as a reply that is not JSON
+        catch (Exception e) when (e is HttpRequestException or OperationCanceledException or IOException or System.Text.Json.JsonException or NotSupportedException)
+        { throw new ServerUnreachableException("Could not reach AutoPrint.", e); }
     }
 }

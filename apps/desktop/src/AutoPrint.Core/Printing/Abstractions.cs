@@ -10,6 +10,10 @@ public sealed record SubmitResult(bool Accepted, string? Error);
 public interface IPrintEngine
 {
     Task<SubmitResult> SubmitAsync(PrintRequest request, CancellationToken ct);
+
+    /// <summary>A reason code when the engine cannot print at all right now (its program is missing or damaged),
+    /// otherwise null. Checked before a document is downloaded, so such a job fails at once and cleanly.</summary>
+    string? NotReady() => null;
 }
 
 public sealed record SpoolerJobInfo(int JobId, string Document, IReadOnlyList<string> Flags, int PagesPrinted, int TotalPages);

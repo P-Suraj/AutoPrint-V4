@@ -1,7 +1,7 @@
 # Builds the AutoPrint installer:  powershell -ExecutionPolicy Bypass -File apps\desktop\installer\build.ps1
 # Output: dist\AutoPrintSetup-<version>.exe and dist\AutoPrintSetup-<version>.exe.sha256.txt
 # Needs: .NET 8 SDK, Inno Setup 6 (ISCC.exe), and the portable SumatraPDF 3.6.1 at apps\desktop\src\AutoPrint.Desktop\tools\SumatraPDF.exe
-param([string]$Version = "4.0.0")
+param([string]$Version = "4.0.1")
 $ErrorActionPreference = "Stop"
 if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) { $env:PATH += ";$env:ProgramFiles\dotnet" }
 $root = Resolve-Path (Join-Path $PSScriptRoot "..\..\..")

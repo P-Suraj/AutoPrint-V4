@@ -52,4 +52,7 @@ public sealed record Claim(
     Guid JobId, Guid AttemptId, string AttemptToken, string SpoolerJobName, DateTimeOffset LeaseExpiresAt,
     string DownloadUrl, string Sha256, long Bytes, int PageCount, PrintOptions Options);
 
-public sealed record QueueSnapshot(string ShopCode, string ShopName, IReadOnlyList<JobSummary> Jobs, DateTimeOffset At);
+/// <param name="At">When the reply arrived, by this PC's clock.</param>
+/// <param name="ServerNow">The server's own clock at that moment (HTTP Date header), so waiting and expiry times
+/// stay right on a PC whose clock is wrong.</param>
+public sealed record QueueSnapshot(string ShopCode, string ShopName, IReadOnlyList<JobSummary> Jobs, DateTimeOffset At, DateTimeOffset? ServerNow = null);

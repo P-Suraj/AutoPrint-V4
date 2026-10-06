@@ -104,8 +104,43 @@ public sealed class WinSpoolObserver : ISpoolerObserver
         [DllImport("winspool.drv", EntryPoint = "SetJobW", CharSet = CharSet.Unicode, SetLastError = true)]
         public static extern bool SetJob(IntPtr hPrinter, uint jobId, uint level, IntPtr pJob, uint command);
 
+        [StructLayout(LayoutKind.Sequential)]
+        public struct PRINTER_INFO_2
+        {
+            public IntPtr pServerName, pPrinterName, pShareName, pPortName, pDriverName, pComment, pLocation, pDevMode, pSepFile,
+                          pPrintProcessor, pDatatype, pParameters, pSecurityDescriptor;
+            public uint Attributes, Priority, DefaultPriority, StartTime, UntilTime, Status, cJobs, AveragePPM;
+        }
+
+        [DllImport("winspool.drv", EntryPoint = "GetPrinterW", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern bool GetPrinter(IntPtr hPrinter, uint level, IntPtr pPrinter, uint cbBuf, out uint needed);
+
         [DllImport("winspool.drv", EntryPoint = "EnumPrintersW", CharSet = CharSet.Unicode, SetLastError = true)]
         public static extern bool EnumPrinters(uint flags, string? name, uint level, IntPtr pPrinterEnum, uint cbBuf, out uint needed, out uint returned);
+    }
+
+    /// <summary>
+    /// What Windows says about one printer right now. Can take seconds for a network printer that is switched off,
+    /// so never call it on the window's own thread. It only reads; nothing is sent to the printer.
+    /// </summary>
+    public static PrinterHealth Health(string printer)
+    {
+        if (string.IsNullOrWhiteSpace(printer) || !Native.OpenPrinter(printer, out var h, IntPtr.Zero)) return PrinterHealth.Missing(printer ?? "");
+        try
+        {
+            Native.GetPrinter(h, 2, IntPtr.Zero, 0, out uint needed);
+            if (needed == 0) return new PrinterHealth(printer, true, PrinterCatalog.LooksVirtual(printer), false, false, null);
+            var buf = Marshal.AllocHGlobal((int)needed);
+            try
+            {
+                if (!Native.GetPrinter(h, 2, buf, needed, out _)) return new PrinterHealth(printer, true, PrinterCatalog.LooksVirtual(printer), false, false, null);
+                var i = Marshal.PtrToStructure<Native.PRINTER_INFO_2>(buf);
+                string port = Marshal.PtrToStringUni(i.pPortName) ?? "", driver = Marshal.PtrToStringUni(i.pDriverName) ?? "";
+                return PrinterHealth.From(printer, port, driver, i.Attributes, i.Status);
+            }
+            finally { Marshal.FreeHGlobal(buf); }
+        }
+        finally { Native.ClosePrinter(h); }
     }
 
     internal static IReadOnlyList<PrinterInfo> EnumerateInstalledPrinters()
@@ -134,11 +169,39 @@ public sealed class WinSpoolObserver : ISpoolerObserver
 
 public sealed record PrinterInfo(string Name, bool IsVirtual, bool IsOffline);
 
+/// <summary>The state of one printer as Windows reports it. Drivers are often wrong about "offline", so this is
+/// shown as a warning and never used to block a print; only a printer that no longer exists blocks.</summary>
+/// <param name="Trouble">A plain-words problem Windows reports (out of paper, paper jam, door open), or null.</param>
+public sealed record PrinterHealth(string Name, bool Exists, bool IsVirtual, bool Offline, bool Paused, string? Trouble)
+{
+    public static PrinterHealth Missing(string name) => new(name, false, false, false, false, null);
+    public bool Fine => Exists && !IsVirtual && !Offline && !Paused && Trouble is null;
+
+    /// <summary>From the raw Win32 values (PRINTER_INFO_2). Separate from the system call so it can be tested.</summary>
+    public static PrinterHealth From(string name, string port, string driver, uint attributes, uint status)
+    {
+        bool offline = (attributes & 0x400) != 0 || (status & (0x80 | 0x1000)) != 0;        // WORK_OFFLINE; STATUS_OFFLINE, NOT_AVAILABLE
+        bool paused = (status & 0x1) != 0;
+        string? trouble =
+            (status & 0x10) != 0 ? "is out of paper" : (status & 0x8) != 0 ? "has a paper jam" : (status & 0x400000) != 0 ? "has a door open"
+            : (status & 0x40000) != 0 ? "is out of toner or ink" : (status & (0x2 | 0x40 | 0x100000)) != 0 ? "needs someone to look at it" : null;
+        return new(name, true, PrinterCatalog.LooksVirtual(name, port, driver), offline, paused, trouble);
+    }
+}
+
 public static class PrinterCatalog
 {
     private static readonly string[] VirtualMarkers = ["Print to PDF", "XPS Document Writer", "OneNote", "Fax", "Send to", "PDF Creator"];
 
     public static bool LooksVirtual(string name) => VirtualMarkers.Any(m => name.Contains(m, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>A printer whose port is a file or a prompt, or whose driver is a document writer, makes a file, not paper,
+    /// whatever it has been named.</summary>
+    public static bool LooksVirtual(string name, string port, string driver) =>
+        LooksVirtual(name) || LooksVirtual(driver)
+        || port.Equals("PORTPROMPT:", StringComparison.OrdinalIgnoreCase) || port.Equals("FILE:", StringComparison.OrdinalIgnoreCase)
+        || port.Equals("nul:", StringComparison.OrdinalIgnoreCase) || port.StartsWith("XPSPort", StringComparison.OrdinalIgnoreCase)
+        || port.Contains(":\\") || port.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) || port.EndsWith(".xps", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Installed printers, real ones first. Virtual ones are flagged so the app can say they produce no paper.</summary>
     public static IReadOnlyList<PrinterInfo> List() =>

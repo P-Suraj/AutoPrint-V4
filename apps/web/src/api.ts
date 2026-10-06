@@ -5,7 +5,16 @@ import type { components, paths } from "../../../contracts/clients/ts/schema";
 
 export type Schemas = components["schemas"];
 
-const client = createClient<paths>({ baseUrl: import.meta.env.VITE_API_BASE_URL ?? "" });
+// A request that gets no answer (a phone that changed network, a sleeping connection) must end by itself:
+// without this the status page would wait on it for ever instead of trying again.
+export const REQUEST_TIMEOUT_MS = 40_000;
+function fetchWithTimeout(request: Request): Promise<Response> {
+  const stop = new AbortController();
+  const t = setTimeout(() => stop.abort(), REQUEST_TIMEOUT_MS);
+  return fetch(request, { signal: stop.signal }).finally(() => clearTimeout(t));
+}
+
+const client = createClient<paths>({ baseUrl: import.meta.env.VITE_API_BASE_URL ?? "", fetch: fetchWithTimeout });
 
 /** An error from the API, or from the network. `code` comes from the server's error catalog. */
 export class ApiError extends Error {
@@ -58,16 +67,26 @@ export const api = {
  * Upload the PDF with a raw PUT to the signed URL.
  * Never FormData: V3 sent multipart to a raw upload URL and the stored file was not a PDF.
  */
+export const UPLOAD_STALL_MS = 60_000;
 export function uploadPdf(url: string, headers: Record<string, string>, file: File, onProgress?: (fraction: number) => void): Promise<void> {
   // XMLHttpRequest, not fetch: it is the only way a browser reports how much of an upload has been sent.
   return new Promise((resolve, reject) => {
-    const interrupted = () => reject(new ApiError("network", "The upload was interrupted. Check your connection and try again."));
     const xhr = new XMLHttpRequest();
+    // A big file on a slow connection may take minutes, so there is no overall time limit; but an upload that
+    // has sent nothing for a minute has lost its connection and is stopped, so the customer can try again.
+    let stall: ReturnType<typeof setTimeout> | undefined;
+    const alive = () => { clearTimeout(stall); stall = setTimeout(() => xhr.abort(), UPLOAD_STALL_MS); };
+    const interrupted = () => { clearTimeout(stall); reject(new ApiError("network", "The upload was interrupted. Check your connection and try again.")); };
     xhr.open("PUT", url);
     for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
-    if (onProgress) xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
-    xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new ApiError("upload_failed", "The upload did not complete. Please try again.", xhr.status)));
+    xhr.upload.onprogress = (e) => { alive(); if (onProgress && e.lengthComputable) onProgress(e.loaded / e.total); };
+    xhr.onload = () => {
+      clearTimeout(stall);
+      if (xhr.status >= 200 && xhr.status < 300) resolve();
+      else reject(new ApiError("upload_failed", "The upload did not complete. Please try again.", xhr.status));
+    };
     xhr.onerror = interrupted; xhr.onabort = interrupted; xhr.ontimeout = interrupted;
+    alive();
     xhr.send(file);
   });
 }

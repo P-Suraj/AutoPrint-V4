@@ -37,9 +37,16 @@ export function estimate(pageCount: number, o: Options, rates: Rates): Estimate 
   return { ok: true, selectedPages: pages.length, printedSides: sides, paisePerSide: rate, amountPaise: sides * rate };
 }
 
-/** Display only: 600 -> "₹6", 650 -> "₹6.50". Money is always integer paise internally. */
+/** The Indian way of grouping digits: 1234567 -> "12,34,567". Written out so every phone shows the same thing. */
+function grouped(n: number): string {
+  const s = String(n);
+  if (s.length <= 3) return s;
+  return `${s.slice(0, -3).replace(/\B(?=(\d{2})+(?!\d))/g, ",")},${s.slice(-3)}`;
+}
+
+/** Display only: 600 -> "₹6", 650 -> "₹6.50", 30000000 -> "₹3,00,000". Money is always integer paise internally. */
 export function rupees(paise: number): string {
   const r = Math.floor(paise / 100);
   const p = paise % 100;
-  return p === 0 ? `₹${r}` : `₹${r}.${String(p).padStart(2, "0")}`;
+  return p === 0 ? `₹${grouped(r)}` : `₹${grouped(r)}.${String(p).padStart(2, "0")}`;
 }

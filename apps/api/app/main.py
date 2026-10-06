@@ -8,7 +8,9 @@ become the error envelope through the catalog, and nothing secret is ever logged
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
+import re
 import secrets
 import threading
 import time
@@ -16,13 +18,16 @@ from contextlib import asynccontextmanager
 from typing import Optional
 from uuid import UUID, uuid4
 
+import httpx
+import psycopg2
 from fastapi import APIRouter, FastAPI, Header, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app import schemas as s
-from app.db import Database, sha256_hex
+from app import report as reports
+from app.db import Database, PoolBusy, sha256_hex
 from app.email_auth import EmailAuth, EmailAuthError, make_email_auth
 from app.errors import CATALOG, SQL_RESULT_MAP, SQL_SUCCESS
 from app.pdf_validation import PdfRejected, validate_pdf
@@ -68,18 +73,30 @@ def make_storage(settings: Settings) -> Storage:
 
 
 def run_maintenance_once(db: Database, storage: Storage) -> dict:
-    """Idempotent. Called every minute by the API process and directly by tests."""
+    """Idempotent and safe to run from several callers at once. Called every minute by the API process, by the
+    scheduled workflow, and directly by tests."""
     swept = db.call("sweep")
-    return {**swept, "documents_deleted": delete_due_documents(db, storage)}
+    deleted, failed = delete_due_documents(db, storage)
+    return {**swept, "documents_deleted": deleted, "documents_failed": failed}
 
 
-def delete_due_documents(db: Database, storage: Storage, limit: int = 100) -> int:
-    deleted = 0
+def delete_due_documents(db: Database, storage: Storage, limit: int = 100) -> tuple[int, int]:
+    """Deletes stored files whose retention deadline has passed. Returns (deleted, failed).
+
+    A file that cannot be deleted is counted, logged by document id only, and tried again on the next run; it must
+    not stop the files behind it (the oldest is always first in the list, so one stuck file would block retention
+    for every shop). Two callers working on the same file are harmless: deleting a missing object is not an error
+    and the record is only marked once."""
+    deleted = failed = 0
     for document_id, key in db.rows("SELECT document_id, object_key FROM ap.documents_due_for_deletion(%s)", (limit,)):
-        storage.delete(key)                      # delete the object first; mark only after it is gone
-        db.one("SELECT ap.mark_document_deleted(%s)", (document_id,))
-        deleted += 1
-    return deleted
+        try:
+            storage.delete(key)                  # delete the object first; mark only after it is gone
+            db.one("SELECT ap.mark_document_deleted(%s)", (document_id,))
+            deleted += 1
+        except Exception as exc:
+            failed += 1
+            log.error("could not delete document %s: %s", document_id, type(exc).__name__)
+    return deleted, failed
 
 
 def create_app(settings: Optional[Settings] = None, *, contract_only: bool = False, email_auth: Optional[EmailAuth] = None) -> FastAPI:
@@ -132,6 +149,10 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
         log.info("%s %s %s %dms", request.method, getattr(route, "path", "-"), response.status_code,
                  (time.perf_counter() - started) * 1000)
         response.headers["X-AutoPrint-Contract-Version"] = str(s.CONTRACT_VERSION)
+        # Answers carry order secrets, signed URLs and live status: nothing between us and the caller may keep them.
+        # The one exception (the public price list) sets its own header in its handler.
+        if request.url.path.startswith("/v1/") and "cache-control" not in response.headers:
+            response.headers["Cache-Control"] = "no-store"
         return response
 
     @app.exception_handler(ApiException)
@@ -144,9 +165,26 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
         e = CATALOG["invalid_request"]       # never echo the offending input back
         return JSONResponse(status_code=e.http_status, content={"error": {"code": e.code, "message": e.message}})
 
+    @app.exception_handler(psycopg2.OperationalError)
+    @app.exception_handler(psycopg2.InterfaceError)
+    @app.exception_handler(PoolBusy)
+    @app.exception_handler(httpx.HTTPError)
+    async def dependency_handler(request: Request, exc: Exception):
+        """The database or the file store could not be reached, timed out, or (deadlock, cancelled statement) asked for a
+        retry. That is not a bug in the request: answer 503 "try again" so the web page and the shop app retry, instead
+        of the generic 500. Only the exception type and the PostgreSQL error class are logged; the message can hold a
+        host name or a URL."""
+        log.error("dependency failure %s %s on %s", type(exc).__name__, getattr(exc, "pgcode", None) or "-",
+                  getattr(request.scope.get("route"), "path", "-"))
+        e = CATALOG["try_again"]
+        return JSONResponse(status_code=e.http_status, content={"error": {"code": e.code, "message": e.message}},
+                            headers={"Retry-After": "2"})
+
     @app.exception_handler(Exception)
     async def unexpected_handler(request: Request, exc: Exception):
-        log.error("unhandled %s on %s", type(exc).__name__, getattr(request.scope.get("route"), "path", "-"))
+        # the type and the PostgreSQL error code (five characters, e.g. 23514) only: never the message
+        log.error("unhandled %s %s on %s", type(exc).__name__, getattr(exc, "pgcode", None) or "-",
+                  getattr(request.scope.get("route"), "path", "-"))
         e = CATALOG["internal_error"]
         return JSONResponse(status_code=e.http_status, content={"error": {"code": e.code, "message": e.message}})
 
@@ -162,17 +200,19 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
     @customer.get("/shops/{shop_code}", response_model=s.ShopPublic, operation_id="getShop")
     def get_shop(shop_code: str):
         code = shop_code.strip().upper()
-        row = db.one("SELECT name, is_active FROM ap.shops WHERE code = %s", (code,))
+        row = db.one(                                         # one round trip: the shop and whether a computer is online
+            "SELECT s.name, s.is_active, EXISTS (SELECT 1 FROM ap.devices d WHERE d.shop_id = s.id AND d.status = 'active' "
+            "AND d.last_seen_at > now() - make_interval(secs => %s)) FROM ap.shops s WHERE s.code = %s",
+            (settings.agent_online_seconds, code))
         if row is None:
             raise ApiException("shop_not_found")
-        online = db.one(
-            "SELECT EXISTS (SELECT 1 FROM ap.devices d JOIN ap.shops s ON s.id = d.shop_id WHERE s.code = %s "
-            "AND d.status = 'active' AND d.last_seen_at > now() - make_interval(secs => %s))",
-            (code, settings.agent_online_seconds))[0]
-        return s.ShopPublic(code=code, name=row[0], accepting_orders=bool(row[1]), agent_online=bool(online))
+        return s.ShopPublic(code=code, name=row[0], accepting_orders=bool(row[1]), agent_online=bool(row[2]))
 
     @customer.get("/shops/{shop_code}/rates", response_model=s.RateCardPublic, operation_id="getShopRates")
-    def get_rates(shop_code: str):
+    def get_rates(shop_code: str, response: Response):
+        # A price list changes a few times a year and the server's quote is always authoritative, so the browser may
+        # reuse it for a minute (the estimate only). "private": never stored by a shared cache.
+        response.headers["Cache-Control"] = "private, max-age=60"
         row = db.one("SELECT r.version, r.rules FROM ap.rate_cards r JOIN ap.shops s ON s.id = r.shop_id "
                      "WHERE s.code = %s AND r.retired_at IS NULL", (shop_code.strip().upper(),))
         if row is None:
@@ -318,6 +358,8 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
 
     @agent.post("/enroll", response_model=s.EnrollResponse, status_code=201, operation_id="enrollDevice")
     def enroll(body: s.EnrollRequest):
+        if not body.display_name.strip():
+            raise ApiException("invalid_request")
         secret = secrets.token_hex(32)
         res = check(db.call("consume_enrollment", sha256_hex(body.enrollment_code.strip().upper()),
                             body.display_name, sha256_hex(secret)))
@@ -326,6 +368,8 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
     @agent.post("/pair/start", response_model=s.PairStartResponse, status_code=201, operation_id="startPairing")
     def pair_start(body: s.PairStartRequest, request: Request):
         limit(request, "pair", 12, 600)
+        if not body.display_name.strip():
+            raise ApiException("invalid_request")
         res = check(db.call("pair_start", sha256_hex(body.poll_token), sha256_hex(body.device_secret), body.display_name))
         code = res["code"]
         return s.PairStartResponse(pair_code=f"{code[:4]}-{code[4:]}", expires_at=res["expires_at"])
@@ -340,7 +384,10 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
         """The poll. Authenticates, records the heartbeat, sweeps when due, returns the queue: one round trip."""
         res = check(db.call("agent_poll", x_device_id, sha256_hex(x_device_secret), x_agent_version or None))
         if res.get("swept"):
-            delete_due_documents(db, storage, limit=10)       # at most once a minute, a few objects
+            try:
+                delete_due_documents(db, storage, limit=10)   # at most once a minute, a few objects
+            except Exception as exc:                          # cleanup is retried later; the shop's queue must still arrive
+                log.error("cleanup after poll failed: %s", type(exc).__name__)
         return s.JobListResponse(shop_code=res["shop_code"], shop_name=res["shop_name"], jobs=res["jobs"])
 
     @agent.get("/jobs/{job_id}/document", response_model=s.DocumentAccess, operation_id="getJobDocument")
@@ -374,10 +421,25 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
         if res["result"] == "no_job":
             return s.ClaimResponse(status="no_job")
         doc = res["document"]
+        # The job is now "printing" and only this answer carries the attempt token. If the download link cannot be
+        # made (file store unreachable), try once more; if it still fails, close the attempt as failed here. Nothing
+        # was sent to a printer, so that is certain, and the shopkeeper gets "Print again" at once instead of a job
+        # that sits in "printing" until the lease runs out. Never retried automatically.
+        download_url = None
+        for _ in range(2):
+            try:
+                download_url = storage.create_download_url(doc["object_key"])
+                break
+            except Exception as exc:
+                log.error("download link for a claimed job failed: %s", type(exc).__name__)
+        if download_url is None:
+            db.call("report_outcome", res["attempt_id"], res["attempt_token"], x_device_id, "failed",
+                    {"reason": "download_link_unavailable", "printed": False})
+            raise ApiException("try_again")
         return s.ClaimResponse(
             status="claimed", job_id=res["job_id"], attempt_id=res["attempt_id"], attempt_token=res["attempt_token"],
             spooler_job_name=res["spooler_job_name"], lease_expires_at=res["lease_expires_at"],
-            document=s.DocumentAccess(download_url=storage.create_download_url(doc["object_key"]), sha256=doc["sha256"],
+            document=s.DocumentAccess(download_url=download_url, sha256=doc["sha256"],
                                       byte_size=doc["bytes"], page_count=doc["pages"]),
             options=s.PrintOptions(copies=res["options"]["copies"], color=res["options"]["color"], duplex=res["options"]["duplex"],
                                    page_range=res["options"]["page_range"]))
@@ -512,8 +574,7 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
     def provision_shop(body: dict, x_maintenance_token: str = Header("")):
         """Founder tool: creates a shop (if the code is new) and/or publishes a new rate card version, in one transaction.
         Needed because the database port is not reachable from the founder PC."""
-        import json as _json
-        import re as _re
+        _json, _re = json, re
         require_maintenance_token(x_maintenance_token)
         code, name, rules = str(body.get("code", "")).strip().upper(), str(body.get("name", "")).strip(), body.get("rules")
         if not _re.fullmatch(r"[A-Z]{3}[0-9]{3}", code):
@@ -590,34 +651,87 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
         remaining = db.one("SELECT count(*) FROM ap.documents WHERE order_id = ANY(%s) AND deleted_at IS NULL", (ids,))[0]
         return {"orders_matched": len(ids), "documents_deleted_now": n, "documents_remaining": remaining}
 
+    def report_timezone(tz: str) -> str:
+        """Hours and days in the report are shown in this time zone. Checked by asking the database, never trusted."""
+        if not re.fullmatch(r"[A-Za-z0-9_+\-]{1,32}(/[A-Za-z0-9_+\-]{1,32}){0,2}", tz):
+            raise ApiException("invalid_request")
+        try:
+            db.one("SELECT now() AT TIME ZONE %s", (tz,))
+        except psycopg2.DataError:
+            raise ApiException("invalid_request") from None
+        return tz
+
     @app.get("/v1/internal/report/{shop_code}", include_in_schema=False)
-    def shop_report(shop_code: str, hours: int = 24, x_maintenance_token: str = Header("")):
-        """Founder visibility for one shop: job counts and outcomes, how long each took, and whether the shop computer is
-        connected. No document names, no customer data. Same token as migrate."""
+    def shop_report(shop_code: str, hours: int = 24, days: Optional[int] = None, tz: str = "Asia/Kolkata",
+                    x_maintenance_token: str = Header("")):
+        """Founder visibility for one shop: pilot metrics from the job tables and the events table (outcomes, rates,
+        duplicate signs, step timings, busiest hours, computers). No document names, no customer data. Read-only.
+        Window: ?hours=N or ?days=N, at most 90 days. See app/report.py for what each number means."""
         require_maintenance_token(x_maintenance_token)
-        hours = max(1, min(hours, 24 * 14))
-        shop_row = db.one("SELECT id, name FROM ap.shops WHERE code = %s", (shop_code.strip().upper(),))
-        if shop_row is None:
+        window = hours if days is None else max(1, min(days, 90)) * 24
+        result = reports.shop_report(db, shop_code.strip().upper(), window, report_timezone(tz), settings.agent_online_seconds)
+        if result is None:
             raise ApiException("shop_not_found")
-        shop_id = shop_row[0]
-        jobs = db.rows(
-            "SELECT o.short_code, j.status::text, j.attempt_count, j.created_at, "
-            "EXTRACT(EPOCH FROM (j.updated_at - j.created_at))::int AS seconds_open "
-            "FROM ap.jobs j JOIN ap.orders o ON o.id = j.order_id "
-            "WHERE j.shop_id = %s AND j.created_at > now() - make_interval(hours => %s) ORDER BY j.created_at DESC LIMIT 200",
-            (shop_id, hours))
-        devices = db.rows(
-            "SELECT display_name, status::text, last_seen_at, agent_version, created_at FROM ap.devices WHERE shop_id = %s ORDER BY created_at DESC LIMIT 20",
-            (shop_id,))
-        counts: dict[str, int] = {}
-        for r in jobs:
-            counts[r[1]] = counts.get(r[1], 0) + 1
-        return {
-            "shop": {"code": shop_code.upper(), "name": shop_row[1]}, "window_hours": hours,
-            "counts": counts, "attention": counts.get("needs_attention", 0) + counts.get("failed", 0),
-            "jobs": [{"order": r[0], "status": r[1], "attempts": r[2], "created_at": r[3], "seconds_to_final_state": r[4]} for r in jobs],
-            "devices": [{"name": d[0], "status": d[1], "last_seen_at": d[2], "agent_version": d[3], "paired_at": d[4]} for d in devices],
-        }
+        return result
+
+    @app.get("/v1/internal/shops", include_in_schema=False)
+    def list_shops(tz: str = "Asia/Kolkata", x_maintenance_token: str = Header("")):
+        """Founder tool: every shop in one row (switched on or off, computer online or last seen, jobs today, jobs that
+        need a look). Read-only."""
+        require_maintenance_token(x_maintenance_token)
+        return {"shops": reports.shops_overview(db, report_timezone(tz), settings.agent_online_seconds)}
+
+    @app.get("/v1/internal/shop/{shop_code}/rates", include_in_schema=False)
+    def shop_rates(shop_code: str, x_maintenance_token: str = Header("")):
+        """Founder tool: the price list a shop is using now, exactly as stored (also for a shop that is switched off)."""
+        require_maintenance_token(x_maintenance_token)
+        row = db.one(
+            "SELECT s.code, s.name, s.is_active, r.version, r.rules, r.created_at, "
+            "(SELECT count(*) FROM ap.rate_cards x WHERE x.shop_id = s.id) "
+            "FROM ap.shops s LEFT JOIN ap.rate_cards r ON r.shop_id = s.id AND r.retired_at IS NULL WHERE s.code = %s",
+            (shop_code.strip().upper(),))
+        if row is None:
+            raise ApiException("shop_not_found")
+        if row[3] is None:
+            raise ApiException("no_rate_card")
+        return {"shop": {"code": row[0], "name": row[1], "is_active": row[2]}, "version": row[3], "rules": row[4],
+                "published_at": row[5], "versions_published": row[6]}
+
+    @app.post("/v1/internal/shop-update", include_in_schema=False)
+    def update_shop(body: dict, x_maintenance_token: str = Header("")):
+        """Founder tool: switch a shop on or off and/or rename it, in one transaction.
+
+        Off means: customers are told the shop is not taking orders, no new order can be started, and the shopkeeper's
+        dashboard link stops working. The shop computer keeps showing and printing what was already sent. Nothing is
+        deleted, and switching back on restores everything. The change is written to the events table (no names)."""
+        require_maintenance_token(x_maintenance_token)
+        code = str(body.get("code", "")).strip().upper()
+        active, name = body.get("is_active"), body.get("name")
+        if active is not None and not isinstance(active, bool):
+            raise ApiException("invalid_request")
+        if name is not None:
+            name = str(name).strip()
+            if not (1 <= len(name) <= 80) or "\x00" in name:
+                raise ApiException("invalid_request")
+        if active is None and name is None:
+            raise ApiException("invalid_request")
+
+        def work(cur):
+            cur.execute("SELECT id, name, is_active FROM ap.shops WHERE code = %s FOR UPDATE", (code,))
+            row = cur.fetchone()
+            if row is None:
+                raise ApiException("shop_not_found")
+            shop_id, old_name, old_active = row
+            new_name = old_name if name is None else name
+            new_active = old_active if active is None else active
+            changed = {"renamed": new_name != old_name, "is_active_changed": new_active != old_active}
+            if any(changed.values()):
+                cur.execute("UPDATE ap.shops SET name = %s, is_active = %s WHERE id = %s", (new_name, new_active, shop_id))
+                cur.execute("SELECT ap.log_event('shop.updated', 'founder', NULL, %s, NULL, NULL, NULL, %s::jsonb)",
+                            (shop_id, json.dumps({**changed, "is_active": new_active})))
+            return {"code": code, "name": new_name, "is_active": new_active, **changed}
+
+        return db.transaction(work)
 
     @app.post("/v1/internal/shop-login", include_in_schema=False)
     def issue_shop_login(body: dict, x_maintenance_token: str = Header("")):

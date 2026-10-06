@@ -68,7 +68,7 @@ function SignIn({ onKey }: { onKey: (key: string) => void }) {
           <form onSubmit={(e) => { e.preventDefault(); if (email.includes("@")) void send(); }}>
             <label className="field">
               <span className="field-label">Your email <small>The address AutoPrint has for your shop.</small></span>
-              <input type="text" inputMode="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
+              <input type="email" inputMode="email" autoComplete="email" autoCapitalize="none" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
             </label>
             <button type="submit" className="primary big" disabled={state === "sending" || !email.includes("@")}>{state === "sending" ? <><i className="spinner" />Sending…</> : "Email me a sign-in link"}</button>
             <p className="hint">Have a private link from AutoPrint? Just open it; it signs you in by itself.</p>
@@ -116,24 +116,29 @@ function Dashboard({ shopKey: key, onSignOut }: { shopKey: string; onSignOut: ()
   const refresh = useCallback(async () => {
     try {
       const list = (await shopApi.devices(key)).devices;
-      setDevices(list); setNow(Date.now()); setError(null);
+      // an unchanged list keeps its object, so only the "last seen" times are redrawn
+      setDevices((prev) => (prev && JSON.stringify(prev) === JSON.stringify(list) ? prev : list)); setNow(Date.now()); setError(null);
     } catch (e) {
       if (e instanceof ApiError && e.code === "unauthorized") setExpired(true);
       else setError(msg(e));
     }
   }, [key]);
 
-  useEffect(() => {
+  // Who is signed in. If the first try fails (no network at the counter for a moment) it is tried again with the list.
+  const loadMe = useCallback(() => {
     shopApi.me(key).then(setMe).catch((e) => (e instanceof ApiError && e.code === "unauthorized" ? setExpired(true) : setError(msg(e))));
   }, [key]);
+  useEffect(() => { loadMe(); }, [loadMe]);
 
   // The page keeps itself current: the shopkeeper never needs a refresh button to see a computer come online.
   useEffect(() => {
     if (expired) return;
+    const tick = () => { if (document.visibilityState !== "visible") return; void refresh(); if (!me) loadMe(); };
     void refresh();
-    const t = window.setInterval(() => { if (document.visibilityState === "visible") void refresh(); }, REFRESH_MS);
-    return () => window.clearInterval(t);
-  }, [refresh, expired]);
+    const t = window.setInterval(tick, REFRESH_MS);
+    document.addEventListener("visibilitychange", tick);          // back on this tab: show the truth now, not in ten seconds
+    return () => { window.clearInterval(t); document.removeEventListener("visibilitychange", tick); };
+  }, [refresh, expired, me, loadMe]);
 
   // Typing the eighth character is enough: the code is looked up by itself.
   const clean = code.replace(/[^A-Za-z0-9]/g, "").toUpperCase().slice(0, 8);
@@ -227,9 +232,9 @@ function Dashboard({ shopKey: key, onSignOut }: { shopKey: string; onSignOut: ()
                 <tbody>
                   {active.map((d) => (
                     <tr key={d.device_id}>
-                      <td><strong>{d.name}</strong></td>
-                      <td><span className={`pill ${isOnline(d) ? "ok" : ""}`}><i className="dot" />{isOnline(d) ? "Online" : "Offline"}</span></td>
-                      <td className="meta">{d.last_seen_at ? timeAgo(d.last_seen_at, now) : "Not seen yet"}</td>
+                      <td data-label="Computer"><strong>{d.name}</strong></td>
+                      <td data-label="Status"><span className={`pill ${isOnline(d) ? "ok" : ""}`}><i className="dot" />{isOnline(d) ? "Online" : "Offline"}</span></td>
+                      <td className="meta" data-label="Last seen">{d.last_seen_at ? timeAgo(d.last_seen_at, now) : "Not seen yet"}</td>
                       <td className="right"><button onClick={() => disconnect(d.device_id)}>Disconnect</button></td>
                     </tr>
                   ))}

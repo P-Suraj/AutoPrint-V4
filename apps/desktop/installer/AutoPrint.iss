@@ -2,7 +2,7 @@
 ; Per-user install: no administrator rights, nothing outside the user's own folders.
 
 #ifndef AppVersion
-  #define AppVersion "4.0.0"
+  #define AppVersion "4.0.1"
 #endif
 #ifndef SourceDir
   #error SourceDir must be passed by build.ps1
@@ -61,8 +61,9 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 Filename: "{app}\AutoPrint.exe"; Description: "Open AutoPrint now"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
-; stop the running app so its files can be removed
-Filename: "{sys}\taskkill.exe"; Parameters: "/IM AutoPrint.exe /F"; Flags: runhidden; RunOnceId: "StopAutoPrint"
+; stop the running app so its files can be removed. Only the copy installed here: another program on the PC
+; can also be called AutoPrint.exe (V3 is), and it must not be stopped.
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -Command ""Get-Process AutoPrint -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -eq '{app}\AutoPrint.exe' } | Stop-Process -Force"""; Flags: runhidden; RunOnceId: "StopAutoPrint"
 
 [UninstallDelete]
 ; settings, journal and log are kept on purpose (the journal protects against re-printing); remove only temp work files
