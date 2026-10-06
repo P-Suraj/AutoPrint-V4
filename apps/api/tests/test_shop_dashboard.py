@@ -156,3 +156,22 @@ def test_founder_can_create_a_shop_and_publish_rates_without_the_database_port(s
         assert c.get(f"/v1/shops/{code}/rates").status_code == 200
         again = c.post("/v1/internal/shop", headers=tok, json={"code": code, "rules": rules}).json()
         assert again == {"code": code, "created": False, "rate_card_version": 2}
+
+
+def test_purge_deletes_the_files_of_a_finished_order_but_not_of_a_live_one(settings, shop, flow, raw_db):
+    import dataclasses
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+    tok = {"X-Maintenance-Token": "m" * 40}
+    parts = flow.full(pdfs.blank(2))
+    short = flow.view().json()["short_code"]
+    with TestClient(create_app(dataclasses.replace(settings, maintenance_token="m" * 40))) as c:
+        assert c.post("/v1/internal/purge", json={"shop_code": shop.code, "order": short}).status_code == 401
+        live = c.post("/v1/internal/purge", headers=tok, json={"shop_code": shop.code, "order": short})
+        assert live.status_code == 409                                              # still waiting for approval: nothing deleted
+        assert raw_db.one("SELECT count(*) FROM ap.documents WHERE deleted_at IS NULL") >= 1
+        assert flow.cancel().status_code == 200                                     # the job is now final
+        done = c.post("/v1/internal/purge", headers=tok, json={"shop_code": shop.code, "order": short})
+        assert done.status_code == 200, done.text
+        assert done.json()["documents_remaining"] == 0 and done.json()["documents_deleted_now"] >= 1
+        assert c.post("/v1/internal/purge", headers=tok, json={"shop_code": shop.code, "order": "ZZZZ"}).status_code == 404

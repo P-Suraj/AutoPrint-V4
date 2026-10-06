@@ -123,6 +123,13 @@ Each run leaves one completed order on the test shop TST001 (retained until the 
 - Still open in Phase 7: clean-PC install timed against the runbook, retention proven live past a real window, reboot test, 24-hour soak, purge-on-request script, counter poster generator.
 - 211 Python tests pass.
 
+## Poster, installable site, purge (6 Oct 2026)
+
+- `/poster/CODE`: printable A4 counter sign (QR to `/s/CODE`, shop code, three steps), linked from the shopkeeper dashboard. Live and screenshotted. The QR is produced by a standard library; **not yet scanned with a real phone**.
+- The site has a web app manifest and icons, so a phone can add it to the home screen. **Not yet tried on a phone**; there is no offline mode or service worker.
+- `POST /v1/internal/purge` and `ap_remote.py purge`: delete one finished order's files on request. Local tests pass (refused while live, works once final, files gone, 404 for an unknown order). Not run on a real live order.
+- 212 Python tests.
+
 ## Customer connection (discussed, not built)
 
 Today a customer reaches a shop by scanning the counter QR or opening `/s/<SHOP CODE>`; no account. Decided on 5 Oct 2026, to build later: a home-page box where the customer types the short shop code (keep `ABC123`), typo correction by position (letter where digit belongs), case and dash insensitive, show shop name before upload, remember the last shop, optional add-to-home-screen, a printable counter poster. Open risk: no verified per-address rate limit on customer requests.

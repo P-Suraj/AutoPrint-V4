@@ -492,6 +492,26 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
 
         return db.transaction(work)
 
+    @app.post("/v1/internal/purge", include_in_schema=False)
+    def purge_order(body: dict, x_maintenance_token: str = Header("")):
+        """Deletes the uploaded documents of one order now (a customer asked for it). The order, job and event records stay,
+        without any file. Refused while a job could still print (approved or printing) or wait for approval."""
+        require_maintenance_token(x_maintenance_token)
+        shop_code, short = str(body.get("shop_code", "")).strip().upper(), str(body.get("order", "")).strip().upper()
+        orders = db.rows(
+            "SELECT o.id FROM ap.orders o JOIN ap.shops s ON s.id = o.shop_id WHERE s.code = %s AND o.short_code = %s "
+            "AND o.access_until > now() - interval '30 days'", (shop_code, short))
+        if not orders:
+            raise ApiException("order_not_found")
+        ids = [r[0] for r in orders]
+        live = db.one("SELECT count(*) FROM ap.jobs WHERE order_id = ANY(%s) AND status IN ('awaiting_approval', 'approved', 'printing')", (ids,))[0]
+        if live:
+            raise ApiException("not_actionable")
+        db.rows("UPDATE ap.documents SET delete_after = now() WHERE order_id = ANY(%s) AND deleted_at IS NULL RETURNING id", (ids,))
+        n = delete_due_documents(db, storage, limit=50)
+        remaining = db.one("SELECT count(*) FROM ap.documents WHERE order_id = ANY(%s) AND deleted_at IS NULL", (ids,))[0]
+        return {"orders_matched": len(ids), "documents_deleted_now": n, "documents_remaining": remaining}
+
     @app.get("/v1/internal/report/{shop_code}", include_in_schema=False)
     def shop_report(shop_code: str, hours: int = 24, x_maintenance_token: str = Header("")):
         """Founder visibility for one shop: job counts and outcomes, how long each took, and whether the shop computer is

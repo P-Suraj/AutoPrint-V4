@@ -6,7 +6,7 @@ For the founder. Everything here was done or checked on 5 October 2026 unless ma
 The database port is blocked from the founder PC, so these tools go through the deployed API (`scripts/ap_remote.py`, uses the maintenance token from `.env`).
 1. Create the shop and its prices in one step: `PY scripts/ap_remote.py create-shop ABC123 "Shop name" --rates rates.json`. Shop codes are three letters and three digits. `rates.json` has the same shape as the demo rate card (`bw` and `color`, each with `simplex` and `duplex` slabs in paise per side). A bad rate card is refused and nothing is created. To change prices later: `set-rates ABC123 --rates rates.json` (publishes a new version; old orders keep the price they were quoted).
 2. Create the shopkeeper link: `PY scripts/ap_remote.py shop-link ABC123 --label owner`. It prints a private link once; hand it over in person.
-3. The customer link is `https://autoprint-v4.vercel.app/s/ABC123`. Print the counter QR for it. **Not yet built:** a poster generator.
+3. The customer link is `https://autoprint-v4.vercel.app/s/ABC123`. Print the counter QR for it. The shopkeeper can print the counter sign from their dashboard ("Print your counter sign"), or open `https://autoprint-v4.vercel.app/poster/ABC123`. **Not yet checked:** scanning the printed sign with a real phone.
 
 ## 2. Install at the shop (target under 15 minutes; not yet timed on a clean PC)
 1. Copy `dist\AutoPrintSetup-<version>.exe` to the shop PC. Verify its SHA-256 matches `AutoPrintSetup-<version>.exe.sha256.txt`.
@@ -36,7 +36,7 @@ The database port is blocked from the founder PC, so these tools go through the 
 - Rules (decision O-5/O-10): drafts 1 hour; submitted orders up to 48 hours; finished orders +24 hours; unapproved jobs expire 1 hour after submit. Documents are deleted from storage with the records.
 - The cleanup runs when a shop app polls (at most once a minute) and from the scheduled workflow `.github/workflows/maintenance.yml` every 15 minutes. **One manual step:** add the repository secret `AUTOPRINT_MAINTENANCE_TOKEN` (the workflow fails loudly until you do).
 - Deletion proven locally by tests and live for the storage cache issue (a deleted file is not readable through an unauthenticated URL). **Not yet verified live:** that a file past its real window is gone and an old signed URL stops working; this needs waiting out a real window.
-- Purge a customer's order on request: **not yet built** as a script. Today: delete the order's documents in the Supabase storage bucket and tell me the order code.
+- Purge a customer's order on request: `PY scripts/ap_remote.py purge ABC123 K7QD` (shop code, then the 4-character order code the customer sees). It deletes the uploaded files at once and keeps the order record without any file. It is refused while a job is waiting, approved or printing; reject or cancel it first. Tested locally; **not yet run on a real live order**.
 
 ## 6. Reboot and soak
 - Reboot test: **not yet run.** The app starts at sign-in with `--background` (tray, no window) when that option is on.
