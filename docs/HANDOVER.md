@@ -110,3 +110,6 @@ Better state than the note above assumed. Release build 0 warnings; `dotnet test
 - Changed with no dedicated test: page range ASCII-only and stored normalised (`pricing.py`); purge acts on the most recent order only (`--which`); limiter salt falls back to the Supabase secret key then the maintenance token (founder sets nothing); upload limit now 120 per hour per address (was 150 per 10 minutes), and there is no per-address cap at submit; `ap_remote.py status` and `migrate`, `GET /v1/internal/status`, the workflow's `documents_failed` check. `migrate` was never run live.
 - Not done: RUNBOOK lines for `status` and `migrate`.
 - Watch out: 0017 changes the order of jobs in the poll answer and the desktop app was not checked against it (run `e2e/run_local_chain.py` and the desktop self-test after merging). `test_migrate_endpoint.py` asserts the newest migration is 0018, so any later migration must update it.
+
+### Website on the wip branch (6 Oct)
+Its agent was stopped by hand mid-run and gave no report. Everything under `apps/web` on this branch is of unknown state: run `npx tsc --noEmit`, `npx vitest run`, `npm run build` and `e2e/run_web_e2e.py` before trusting any of it; discard with `git checkout main -- apps/web` if it is not worth finishing.
