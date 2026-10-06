@@ -36,7 +36,7 @@ The database port is blocked from the founder PC, so these tools go through the 
 - Rules (decision O-5/O-10): drafts 1 hour; submitted orders up to 48 hours; finished orders +24 hours; unapproved jobs expire 1 hour after submit. Documents are deleted from storage with the records.
 - The cleanup runs when a shop app polls (at most once a minute) and from the scheduled workflow `.github/workflows/maintenance.yml` every 15 minutes. **One manual step:** add the repository secret `AUTOPRINT_MAINTENANCE_TOKEN` (the workflow fails loudly until you do).
 - Deletion proven locally by tests and live for the storage cache issue (a deleted file is not readable through an unauthenticated URL). **Not yet verified live:** that a file past its real window is gone and an old signed URL stops working; this needs waiting out a real window.
-- Purge a customer's order on request: `PY scripts/ap_remote.py purge ABC123 K7QD` (shop code, then the 4-character order code the customer sees). It deletes the uploaded files at once and keeps the order record without any file. It is refused while a job is waiting, approved or printing; reject or cancel it first. Tested locally; **not yet run on a real live order**.
+- Purge a customer's order on request: `PY scripts/ap_remote.py purge ABC123 K7QD` (shop code, then the 4-character order code the customer sees). It deletes the uploaded files at once and keeps the order record without any file. It is refused while a job is waiting, approved or printing; reject or cancel it first. Tested locally and run live on a finished test order (1 file deleted, repeat deleted 0).
 
 ## 6. Reboot and soak
 - Reboot test: **not yet run.** The app starts at sign-in with `--background` (tray, no window) when that option is on.

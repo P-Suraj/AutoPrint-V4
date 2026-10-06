@@ -127,7 +127,7 @@ Each run leaves one completed order on the test shop TST001 (retained until the 
 
 - `/poster/CODE`: printable A4 counter sign (QR to `/s/CODE`, shop code, three steps), linked from the shopkeeper dashboard. Live and screenshotted. The QR is produced by a standard library; **not yet scanned with a real phone**.
 - The site has a web app manifest and icons, so a phone can add it to the home screen. **Not yet tried on a phone**; there is no offline mode or service worker.
-- `POST /v1/internal/purge` and `ap_remote.py purge`: delete one finished order's files on request. Local tests pass (refused while live, works once final, files gone, 404 for an unknown order). Not run on a real live order.
+- `POST /v1/internal/purge` and `ap_remote.py purge`: delete one finished order's files on request. Local tests pass; run live on a finished test order (1 file deleted, a repeat deleted none). The "refused while live" case was only checked locally.
 - 212 Python tests.
 
 ## Customer connection (discussed, not built)
