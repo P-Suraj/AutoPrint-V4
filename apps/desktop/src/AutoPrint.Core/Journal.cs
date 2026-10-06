@@ -18,6 +18,9 @@ public enum AttemptState
     Reported = 4,
 }
 
+/// <summary>One attempt of a request as this PC recorded it: enough to find its job in the Windows print queue.</summary>
+public sealed record JournalAttempt(Guid AttemptId, string SpoolerJobName, string Printer, AttemptState State);
+
 public sealed record JournalEntry(
     Guid AttemptId, Guid JobId, string SpoolerJobName, string AttemptToken, string Printer, int ExpectedPages, AttemptState State);
 
@@ -129,6 +132,19 @@ public sealed class Journal : IDisposable
             list.Add(new JournalEntry(Guid.Parse(r.GetString(0)), Guid.Parse(r.GetString(1)), r.GetString(2), token,
                                       r.GetString(4), r.GetInt32(5), (AttemptState)r.GetInt32(6)));
         }
+        return list;
+    }
+
+    /// <summary>Every attempt this PC recorded for one request, oldest first. Reads no token, so it works for any attempt.</summary>
+    public IReadOnlyList<JournalAttempt> AttemptsFor(Guid jobId)
+    {
+        using var c = Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT attempt_id, spooler_job_name, printer, state FROM attempts WHERE job_id=$j ORDER BY created_at";
+        cmd.Parameters.AddWithValue("$j", jobId.ToString());
+        var list = new List<JournalAttempt>();
+        using var r = cmd.ExecuteReader();
+        while (r.Read()) list.Add(new JournalAttempt(Guid.Parse(r.GetString(0)), r.GetString(1), r.GetString(2), (AttemptState)r.GetInt32(3)));
         return list;
     }
 

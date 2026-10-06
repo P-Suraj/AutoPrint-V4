@@ -3,6 +3,12 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="AutoPrint settings" Width="560" SizeToContent="Height" WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
         Background="{StaticResource Bg}" Foreground="{StaticResource Ink}" FontFamily="Segoe UI" FontSize="14" UseLayoutRounding="True" SnapsToDevicePixels="True">
+    <Window.Resources>
+        <!-- a printer in the list: its name, then in quiet words why it is not one to choose (makes a file, offline) -->
+        <DataTemplate x:Key="PrinterLine">
+            <TextBlock TextTrimming="CharacterEllipsis"><Run Text="{Binding Name, Mode=OneWay}"/><Run Text="{Binding Gap, Mode=OneWay}"/><Run Text="{Binding Note, Mode=OneWay}" Foreground="{StaticResource Warn}" FontSize="12.5"/></TextBlock>
+        </DataTemplate>
+    </Window.Resources>
     <DockPanel>
         <Border DockPanel.Dock="Bottom" Background="{StaticResource Card}" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0" Padding="20,12">
             <DockPanel>
@@ -20,14 +26,16 @@
                     <StackPanel>
                         <TextBlock Style="{StaticResource H2}" Text="Printer"/>
                         <TextBlock Text="Printer for customer prints" FontWeight="SemiBold" Margin="0,12,0,4"/>
-                        <ComboBox x:Name="BwBox"/>
+                        <ComboBox x:Name="BwBox" SelectedValuePath="Name" ItemTemplate="{StaticResource PrinterLine}"/>
                         <TextBlock x:Name="BwWarn" Style="{StaticResource Soft}" Margin="0,4,0,0" Visibility="Collapsed"/>
                         <TextBlock Text="Colour printer, if it is a different one" FontWeight="SemiBold" Margin="0,12,0,4"/>
-                        <ComboBox x:Name="ColorBox"/>
-                        <DockPanel Margin="0,14,0,0">
-                            <Button x:Name="TestBtn" DockPanel.Dock="Left" Content="Print a test page" Click="OnTest"/>
-                            <TextBlock x:Name="Result" Style="{StaticResource Soft}" VerticalAlignment="Center" Margin="12,0,0,0"/>
-                        </DockPanel>
+                        <ComboBox x:Name="ColorBox" SelectedValuePath="Name" ItemTemplate="{StaticResource PrinterLine}"/>
+                        <TextBlock x:Name="ColorWarn" Style="{StaticResource Soft}" Foreground="{StaticResource Warn}" Margin="0,4,0,0" Visibility="Collapsed"/>
+                        <WrapPanel Margin="0,14,0,0">
+                            <Button x:Name="TestBtn" Content="Print a test page" Click="OnTest" Margin="0,0,8,0"/>
+                            <Button x:Name="TestColorBtn" Content="Test the colour printer" Click="OnTestColour" Visibility="Collapsed"/>
+                        </WrapPanel>
+                        <TextBlock x:Name="Result" Style="{StaticResource Soft}" Margin="0,8,0,0" Visibility="Collapsed"/>
                     </StackPanel>
                 </Border>
 

@@ -4,7 +4,9 @@ using AutoPrint.Core.Shop;
 namespace AutoPrint.Core.Agent;
 
 public enum RunKind { NoJob, Completed, Failed, Uncertain }
-public sealed record RunResult(RunKind Kind, Guid? JobId, string Reason);
+/// <param name="Detail">What the print program itself said when it failed (engine_timeout, exit_code_1, ...), or null.</param>
+/// <param name="Printer">The printer the job was meant for, so the shopkeeper can be told which one to check.</param>
+public sealed record RunResult(RunKind Kind, Guid? JobId, string Reason, string? Detail = null, string? Printer = null);
 
 public enum Stage { Idle, Claimed, Downloading, Printing, Watching, Reporting }
 public sealed record Activity(Stage Stage, Guid? JobId, string? Detail);
@@ -68,9 +70,13 @@ public sealed class PrintOrchestrator(
             }
 
             if (string.IsNullOrWhiteSpace(printer) || !observer.PrinterExists(printer))
-                return await ReportAsync(claim, Outcome.Failed, "printer_not_found", null, ct);
+                return await ReportAsync(claim, Outcome.Failed, "printer_not_found", null, ct) with { Printer = printer };
             if (engine.NotReady() is { } notReady)
                 return await ReportAsync(claim, Outcome.Failed, notReady, null, ct);
+            // A page range that is not a plain "1-3,5" is not guessed at: the print program would ignore it and print
+            // every page. The job fails here, before the file is even fetched, and a person decides what to do.
+            if (!PageRange.TryNormalize(claim.Options.PageRange, out _))
+                return await ReportAsync(claim, Outcome.Failed, PageRange.InvalidReason, null, ct);
 
             Emit(Stage.Downloading, claim.JobId);
             try { await downloader.DownloadAsync(claim.DownloadUrl, claim.Sha256, claim.Bytes, file, ct); }
@@ -119,7 +125,7 @@ public sealed class PrintOrchestrator(
             }
 
             var decision = OutcomeRules.Decide(submit, evidence);
-            return await ReportAsync(claim, decision.Outcome, decision.Reason, evidence, ct);
+            return await ReportAsync(claim, decision.Outcome, decision.Reason, evidence, ct) with { Detail = submit.Error, Printer = printer };
         }
         finally
         {
@@ -211,13 +217,15 @@ public sealed class PrintOrchestrator(
     /// outcome decided in this run is sent as it was, with its evidence. After a restart only the journal is left:
     /// if the print might have started it is "uncertain"; if nothing was ever sent it is "failed". Never reprints.
     /// </summary>
-    public async Task<int> RecoverAsync(CancellationToken ct)
+    /// <param name="settledOne">Told about each attempt settled from the journal alone, so the shopkeeper can be told why.</param>
+    public async Task<int> RecoverAsync(CancellationToken ct, Action<RunResult>? settledOne = null)
     {
         int settled = 0;
         foreach (var e in journal.Unreported())
         {
             Outcome outcome;
             IDictionary<string, object?> wire;
+            string? fromJournal = null;
             if (_undelivered.TryGetValue(e.AttemptId, out var kept)) (outcome, wire) = kept;
             else
             {
@@ -225,6 +233,7 @@ public sealed class PrintOrchestrator(
                 outcome = maybeSent ? Outcome.Uncertain : Outcome.Failed;
                 var reason = maybeSent ? "agent_restarted_after_print_intent" : "agent_restarted_before_print";
                 wire = new Dictionary<string, object?> { ["reason"] = reason, ["journal_state"] = e.State.ToString() };
+                fromJournal = reason;
             }
             try
             {
@@ -232,6 +241,9 @@ public sealed class PrintOrchestrator(
                 journal.MarkReported(e.AttemptId, outcome.ToString());
                 _undelivered.Remove(e.AttemptId);
                 settled++;
+                if (fromJournal is not null)
+                    try { settledOne?.Invoke(new(ToKind(outcome), e.JobId, fromJournal, null, e.Printer)); }
+                    catch (Exception x) { Log("recovery listener failed: " + SafeText.Describe(x)); }
             }
             // "Not signed in" and "too many requests" say nothing about this attempt: keep it and let the caller react.
             catch (ApiRejectedException x) when (x.IsAuthFailure || x.Code == "rate_limited") { throw; }

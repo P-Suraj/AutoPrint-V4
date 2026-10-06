@@ -12,8 +12,7 @@ namespace AutoPrint.Desktop;
 public partial class App : Application
 {
     public const string Version = "4.0.1";
-    private Mutex? _single;
-    private EventWaitHandle? _showSignal;
+    private SingleInstance? _single;
     private System.Windows.Forms.NotifyIcon? _tray;
     private MainWindow? _window;
     public static HttpClient Http { get; internal set; } = new() { Timeout = TimeSpan.FromSeconds(30) };     // replaced only by the self-test, with a made-up server
@@ -31,17 +30,15 @@ public partial class App : Application
         if (e.Args.Length == 2 && e.Args[0] == "--selftest-preview") { SelfTestPreview(e.Args[1]); return; }
         if (e.Args.Length >= 2 && e.Args[0] == "--selftest-ui") { _ = SelfTest.RunAsync(this, e.Args[1], e.Args.Length > 2 ? e.Args[2] : null); return; }
 
-        _single = new Mutex(true, @"Local\AutoPrint.V4.SingleInstance", out bool first);
-        _showSignal = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\AutoPrint.V4.ShowWindow");
-        if (!first)
+        _single = new SingleInstance(SingleInstance.RealName);
+        if (!_single.IsFirst)
         {
             // Already running (in the tray). Opening it again must not look like "nothing happens": bring its window up.
-            _showSignal.Set();
+            _single.AskFirstToShow();
             Shutdown();
             return;
         }
-        var listener = new Thread(() => { while (_showSignal.WaitOne()) Dispatcher.BeginInvoke(ShowWindow); }) { IsBackground = true, Name = "show-window" };
-        listener.Start();
+        _single.Listen(() => Dispatcher.BeginInvoke(ShowWindow));
 
         try
         {
@@ -64,7 +61,7 @@ public partial class App : Application
         }
         Log($"started {Version}");
         // the laptop lid opens, or the Wi-Fi comes back: reconnect now, not when the back-off timer gets round to it
-        Microsoft.Win32.SystemEvents.PowerModeChanged += (_, a) => { if (a.Mode == Microsoft.Win32.PowerModes.Resume) { Log("woke from sleep"); _window?.WakeAgent(); } };
+        Microsoft.Win32.SystemEvents.PowerModeChanged += (_, a) => { if (a.Mode == Microsoft.Win32.PowerModes.Resume) OnResume(); };
         System.Net.NetworkInformation.NetworkChange.NetworkAvailabilityChanged += (_, a) => { if (a.IsAvailable) _window?.WakeAgent(); };
         _window.Start();
         if (!Array.Exists(e.Args, a => a == "--background")) ShowWindow();
@@ -85,13 +82,29 @@ public partial class App : Application
         Shutdown(code);
     }
 
+    /// <summary>Windows says the PC has woken up. The agent may be in the middle of a long wait between tries: poll now.</summary>
+    internal void OnResume() { Log("woke from sleep"); _window?.WakeAgent(); }
+
+    /// <summary>Self-test only: lets the test drive Quit, wake and "show the window" on a window it made itself.</summary>
+    internal void Adopt(MainWindow window) => _window = window;
+
+    /// <summary>Asks a yes/no question. Replaced by the self-test, which answers without a message box.</summary>
+    internal Func<string, bool> Confirm = text =>
+        MessageBox.Show(text, "AutoPrint", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) == MessageBoxResult.Yes;
+
+    /// <summary>Ends the process. Replaced by the self-test, which has more to check after Quit.</summary>
+    internal Action? ExitProcess;
+
+    /// <summary>When false the window is shown without taking the keyboard (self-test: nothing may grab the founder's typing).</summary>
+    internal bool ActivateOnShow = true;
+
     public void ShowWindow()
     {
         if (_window is null) return;
-        _window.ShowActivated = true;
+        _window.ShowActivated = ActivateOnShow;
         _window.Show();
         if (_window.WindowState == WindowState.Minimized) _window.WindowState = WindowState.Normal;
-        _window.Activate();
+        if (ActivateOnShow) _window.Activate();
     }
 
     public void Notify(string text) { try { _tray?.ShowBalloonTip(5000, "AutoPrint", text, System.Windows.Forms.ToolTipIcon.Info); } catch (Exception e) { Log("notify: " + e.GetType().Name); } }
@@ -102,12 +115,12 @@ public partial class App : Application
         var text = _window?.IsPrinting == true
             ? "A document is being sent to the printer right now. If you quit, it will show “Needs your attention” next time.\n\nQuit AutoPrint anyway?"
             : "While AutoPrint is closed, new print requests wait and customers see your shop as offline.\n\nQuit AutoPrint?";
-        if (MessageBox.Show(text, "AutoPrint", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+        if (!Confirm(text)) return;
         Log("quit by the user");
         _window?.Stop();
         if (_tray is not null) { _tray.Visible = false; _tray.Dispose(); }
         FlushLog();
-        Shutdown();
+        if (ExitProcess is { } exit) exit(); else Shutdown();
     }
 
     protected override void OnExit(ExitEventArgs e) { FlushLog(); base.OnExit(e); }
@@ -151,4 +164,36 @@ public partial class App : Application
     {
         for (int i = 0; i < 100 && Volatile.Read(ref _pending) > 0; i++) Thread.Sleep(10);
     }
+}
+
+/// <summary>
+/// One AutoPrint per Windows user. The first to start owns a named mutex and listens on a named event; a later start
+/// finds the mutex taken, raises the event so the first one shows its window, and leaves. The name is a parameter so
+/// the self-test can exercise exactly this with a name of its own, without touching a real AutoPrint that is running.
+/// </summary>
+internal sealed class SingleInstance : IDisposable
+{
+    public const string RealName = @"Local\AutoPrint.V4";
+    private readonly Mutex _mutex;
+    private readonly EventWaitHandle _show;
+    private volatile bool _closed;
+
+    public bool IsFirst { get; }
+
+    public SingleInstance(string name)
+    {
+        _mutex = new Mutex(true, name + ".SingleInstance", out bool first);
+        _show = new EventWaitHandle(false, EventResetMode.AutoReset, name + ".ShowWindow");
+        IsFirst = first;
+    }
+
+    public void AskFirstToShow() => _show.Set();
+
+    public void Listen(Action show)
+    {
+        var listener = new Thread(() => { while (_show.WaitOne() && !_closed) show(); }) { IsBackground = true, Name = "show-window" };
+        listener.Start();
+    }
+
+    public void Dispose() { _closed = true; try { _show.Set(); } catch (ObjectDisposedException) { } }
 }

@@ -50,10 +50,15 @@ public sealed class WinSpoolObserver : ISpoolerObserver
 
     public void RemoveJob(string printer, int jobId)
     {
-        if (!Native.OpenPrinter(printer, out var h, new Native.PRINTER_DEFAULTS { DesiredAccess = Native.PRINTER_ACCESS_USE | Native.PRINTER_ACCESS_ADMINISTER }))
-            throw new InvalidOperationException("printer_unavailable");
-        try { Native.SetJob(h, (uint)jobId, 0, IntPtr.Zero, Native.JOB_CONTROL_DELETE); }
-        finally { Native.ClosePrinter(h); }
+        // A user may always cancel a job they sent themselves with plain "use" access. Asking for "administer" as well
+        // fails outright for a standard user on many printers, so that is only the second try.
+        foreach (var access in new[] { Native.PRINTER_ACCESS_USE, Native.PRINTER_ACCESS_USE | Native.PRINTER_ACCESS_ADMINISTER })
+        {
+            if (!Native.OpenPrinter(printer, out var h, new Native.PRINTER_DEFAULTS { DesiredAccess = access })) continue;
+            try { if (Native.SetJob(h, (uint)jobId, 0, IntPtr.Zero, Native.JOB_CONTROL_DELETE)) return; }
+            finally { Native.ClosePrinter(h); }
+        }
+        throw new InvalidOperationException("spooler_remove_failed");
     }
 
     /// <summary>Names match the Win32 JOB_STATUS_* flags used in the spike and in the completion rule.</summary>
@@ -128,12 +133,14 @@ public sealed class WinSpoolObserver : ISpoolerObserver
         if (string.IsNullOrWhiteSpace(printer) || !Native.OpenPrinter(printer, out var h, IntPtr.Zero)) return PrinterHealth.Missing(printer ?? "");
         try
         {
+            var byName = PrinterCatalog.Classify(printer);
+            var nameOnly = new PrinterHealth(printer, true, byName != PrinterKind.Paper, false, false, null, byName == PrinterKind.Prompt);
             Native.GetPrinter(h, 2, IntPtr.Zero, 0, out uint needed);
-            if (needed == 0) return new PrinterHealth(printer, true, PrinterCatalog.LooksVirtual(printer), false, false, null);
+            if (needed == 0) return nameOnly;
             var buf = Marshal.AllocHGlobal((int)needed);
             try
             {
-                if (!Native.GetPrinter(h, 2, buf, needed, out _)) return new PrinterHealth(printer, true, PrinterCatalog.LooksVirtual(printer), false, false, null);
+                if (!Native.GetPrinter(h, 2, buf, needed, out _)) return nameOnly;
                 var i = Marshal.PtrToStructure<Native.PRINTER_INFO_2>(buf);
                 string port = Marshal.PtrToStringUni(i.pPortName) ?? "", driver = Marshal.PtrToStringUni(i.pDriverName) ?? "";
                 return PrinterHealth.From(printer, port, driver, i.Attributes, i.Status);
@@ -141,6 +148,29 @@ public sealed class WinSpoolObserver : ISpoolerObserver
             finally { Marshal.FreeHGlobal(buf); }
         }
         finally { Native.ClosePrinter(h); }
+    }
+
+    /// <summary>Port and driver of every printer installed on this PC itself (level 2, local only: the spooler answers
+    /// from its own records and no network printer is contacted). Printers shared from another computer are not in it.</summary>
+    private static Dictionary<string, (string Port, string Driver)> LocalPortsAndDrivers()
+    {
+        var map = new Dictionary<string, (string, string)>(StringComparer.OrdinalIgnoreCase);
+        Native.EnumPrinters(Native.PRINTER_ENUM_LOCAL, null, 2, IntPtr.Zero, 0, out uint needed, out _);
+        if (needed == 0) return map;
+        var buf = Marshal.AllocHGlobal((int)needed);
+        try
+        {
+            if (!Native.EnumPrinters(Native.PRINTER_ENUM_LOCAL, null, 2, buf, needed, out _, out uint count)) return map;
+            int size = Marshal.SizeOf<Native.PRINTER_INFO_2>();
+            for (int i = 0; i < count; i++)
+            {
+                var p = Marshal.PtrToStructure<Native.PRINTER_INFO_2>(buf + i * size);
+                if (Marshal.PtrToStringUni(p.pPrinterName) is { } name)
+                    map[name] = (Marshal.PtrToStringUni(p.pPortName) ?? "", Marshal.PtrToStringUni(p.pDriverName) ?? "");
+            }
+        }
+        finally { Marshal.FreeHGlobal(buf); }
+        return map;
     }
 
     internal static IReadOnlyList<PrinterInfo> EnumerateInstalledPrinters()
@@ -152,6 +182,8 @@ public sealed class WinSpoolObserver : ISpoolerObserver
         try
         {
             if (!Native.EnumPrinters(flags, null, 4, buf, needed, out _, out uint count)) return [];
+            Dictionary<string, (string Port, string Driver)> local;
+            try { local = LocalPortsAndDrivers(); } catch (Exception) { local = []; }      // the names alone still give a list
             var list = new List<PrinterInfo>();
             int size = Marshal.SizeOf<Native.PRINTER_INFO_4>();
             for (int i = 0; i < count; i++)
@@ -159,7 +191,8 @@ public sealed class WinSpoolObserver : ISpoolerObserver
                 var p = Marshal.PtrToStructure<Native.PRINTER_INFO_4>(buf + i * size);
                 if (p.pPrinterName is null) continue;
                 bool offline = (p.Attributes & 0x400) != 0;                         // PRINTER_ATTRIBUTE_WORK_OFFLINE
-                list.Add(new PrinterInfo(p.pPrinterName, PrinterCatalog.LooksVirtual(p.pPrinterName), offline));
+                var kind = local.TryGetValue(p.pPrinterName, out var d) ? PrinterCatalog.Classify(p.pPrinterName, d.Port, d.Driver) : PrinterCatalog.Classify(p.pPrinterName);
+                list.Add(new PrinterInfo(p.pPrinterName, kind != PrinterKind.Paper, offline, kind == PrinterKind.Prompt));
             }
             return list;
         }
@@ -167,12 +200,26 @@ public sealed class WinSpoolObserver : ISpoolerObserver
     }
 }
 
-public sealed record PrinterInfo(string Name, bool IsVirtual, bool IsOffline);
+/// <summary>What comes out of a printer, as far as its port, driver and name tell.</summary>
+public enum PrinterKind
+{
+    /// <summary>Nothing says otherwise: treated as a real printer.</summary>
+    Paper,
+    /// <summary>Writes a file to a fixed place without asking anyone (its port is a file path). No paper.</summary>
+    File,
+    /// <summary>No paper, and it opens a window on this PC (Save As, a fax wizard, a notes app) and waits for a person.</summary>
+    Prompt,
+}
+
+/// <param name="IsVirtual">It does not print on paper.</param>
+/// <param name="Prompts">It also opens a window and waits for a person, so a print sent to it just sits there.</param>
+public sealed record PrinterInfo(string Name, bool IsVirtual, bool IsOffline, bool Prompts = false);
 
 /// <summary>The state of one printer as Windows reports it. Drivers are often wrong about "offline", so this is
 /// shown as a warning and never used to block a print; only a printer that no longer exists blocks.</summary>
 /// <param name="Trouble">A plain-words problem Windows reports (out of paper, paper jam, door open), or null.</param>
-public sealed record PrinterHealth(string Name, bool Exists, bool IsVirtual, bool Offline, bool Paused, string? Trouble)
+/// <param name="Prompts">It makes no paper and opens a window that waits for a person (see <see cref="PrinterKind.Prompt"/>).</param>
+public sealed record PrinterHealth(string Name, bool Exists, bool IsVirtual, bool Offline, bool Paused, string? Trouble, bool Prompts = false)
 {
     public static PrinterHealth Missing(string name) => new(name, false, false, false, false, null);
     public bool Fine => Exists && !IsVirtual && !Offline && !Paused && Trouble is null;
@@ -185,25 +232,70 @@ public sealed record PrinterHealth(string Name, bool Exists, bool IsVirtual, boo
         string? trouble =
             (status & 0x10) != 0 ? "is out of paper" : (status & 0x8) != 0 ? "has a paper jam" : (status & 0x400000) != 0 ? "has a door open"
             : (status & 0x40000) != 0 ? "is out of toner or ink" : (status & (0x2 | 0x40 | 0x100000)) != 0 ? "needs someone to look at it" : null;
-        return new(name, true, PrinterCatalog.LooksVirtual(name, port, driver), offline, paused, trouble);
+        var kind = PrinterCatalog.Classify(name, port, driver);
+        return new(name, true, kind != PrinterKind.Paper, offline, paused, trouble, kind == PrinterKind.Prompt);
     }
 }
 
+/// <summary>
+/// Tells printers that put ink on paper from the "printers" that Windows and other programs install to make a file,
+/// send a fax or open a note. The port and the driver decide; the name is only the fallback, because a shopkeeper can
+/// rename a printer. It only ever warns: nothing here blocks a print.
+/// </summary>
 public static class PrinterCatalog
 {
-    private static readonly string[] VirtualMarkers = ["Print to PDF", "XPS Document Writer", "OneNote", "Fax", "Send to", "PDF Creator"];
+    // Document writers, fax and note "printers", by the words in their driver or name.
+    private static readonly string[] Markers =
+        ["Print to PDF", "XPS Document Writer", "OneNote", "Fax", "Send to", "Journal Note Writer", "Document Image Writer",
+         "PDF Creator", "PDFCreator", "PDF24", "CutePDF", "doPDF", "novaPDF", "Bullzip", "Adobe PDF", "Foxit", "Nitro PDF", "PDF-XChange",
+         "PDF Writer", "PDF Printer", "PDF Converter", "Print to File", "Snagit", "Evernote", "Document Converter"];
 
-    public static bool LooksVirtual(string name) => VirtualMarkers.Any(m => name.Contains(m, StringComparison.OrdinalIgnoreCase));
+    private static bool Marked(string text) => Markers.Any(m => text.Contains(m, StringComparison.OrdinalIgnoreCase));
 
-    /// <summary>A printer whose port is a file or a prompt, or whose driver is a document writer, makes a file, not paper,
-    /// whatever it has been named.</summary>
-    public static bool LooksVirtual(string name, string port, string driver) =>
-        LooksVirtual(name) || LooksVirtual(driver)
-        || port.Equals("PORTPROMPT:", StringComparison.OrdinalIgnoreCase) || port.Equals("FILE:", StringComparison.OrdinalIgnoreCase)
-        || port.Equals("nul:", StringComparison.OrdinalIgnoreCase) || port.StartsWith("XPSPort", StringComparison.OrdinalIgnoreCase)
-        || port.Contains(":\\") || port.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) || port.EndsWith(".xps", StringComparison.OrdinalIgnoreCase);
+    private static bool IsFilePath(string port) =>
+        port.Contains(":\\") || new[] { ".pdf", ".xps", ".oxps", ".prn" }.Any(x => port.EndsWith(x, StringComparison.OrdinalIgnoreCase));
 
-    /// <summary>Installed printers, real ones first. Virtual ones are flagged so the app can say they produce no paper.</summary>
+    /// <summary>When only the name is known (a printer shared from another computer, or Windows gave no details).
+    /// A document writer is assumed to ask where to save, because most do and the app cannot know.</summary>
+    public static PrinterKind Classify(string name) => Marked(name) ? PrinterKind.Prompt : PrinterKind.Paper;
+
+    /// <summary>
+    /// By port first. PORTPROMPT:, FILE: and the old XPS port ask for a file name every time, and the fax and OneNote
+    /// ports open their own window: a print sent there waits for a person. A port that is a file path writes that
+    /// file without asking. After the port, the driver and the name: a document writer on a port of its own is
+    /// assumed to ask, because most do and the app cannot know.
+    /// </summary>
+    public static PrinterKind Classify(string name, string port, string driver)
+    {
+        // several ports can be ticked for one printer ("LPT1:,FILE:"); one that asks is enough to make a print wait
+        var ports = port.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        bool Any(Func<string, bool> test) => ports.Any(test);
+        if (Any(p => p.Equals("PORTPROMPT:", StringComparison.OrdinalIgnoreCase) || p.Equals("FILE:", StringComparison.OrdinalIgnoreCase)
+                  || p.StartsWith("XPSPort", StringComparison.OrdinalIgnoreCase) || p.StartsWith("SHRFAX", StringComparison.OrdinalIgnoreCase)
+                  || p.Contains("OneNote", StringComparison.OrdinalIgnoreCase)))
+            return PrinterKind.Prompt;
+        if (Any(IsFilePath)) return PrinterKind.File;
+        if (Marked(driver) || Marked(name)) return PrinterKind.Prompt;
+        if (Any(p => p.Equals("nul:", StringComparison.OrdinalIgnoreCase) || p.Equals("nul", StringComparison.OrdinalIgnoreCase))) return PrinterKind.File;
+        return PrinterKind.Paper;
+    }
+
+    public static bool LooksVirtual(string name) => Classify(name) != PrinterKind.Paper;
+    public static bool LooksVirtual(string name, string port, string driver) => Classify(name, port, driver) != PrinterKind.Paper;
+
+    /// <summary>What to tell the shopkeeper about a printer that makes no paper, or null for a real one. One wording
+    /// for Settings and for the queue.</summary>
+    public static string? Warning(string name, bool isVirtual, bool prompts) =>
+        !isVirtual ? null
+        : prompts ? $"“{name}” does not print on paper. It makes a file, and may open a window that waits for someone to answer, so a customer's print would just sit there."
+        : $"“{name}” does not print on paper. It makes a file on this computer.";
+
+    /// <summary>The printer to offer when none has been chosen yet: the first real one that is not marked offline, else
+    /// the first real one, else none. Never one that makes a file or opens a window: that is only ever chosen by hand.</summary>
+    public static string? DefaultChoice(IReadOnlyList<PrinterInfo> printers) =>
+        (printers.FirstOrDefault(p => !p.IsVirtual && !p.IsOffline) ?? printers.FirstOrDefault(p => !p.IsVirtual))?.Name;
+
+    /// <summary>Installed printers, real ones first. Those that make no paper are flagged so the app can say so.</summary>
     public static IReadOnlyList<PrinterInfo> List() =>
         WinSpoolObserver.EnumerateInstalledPrinters().OrderBy(p => p.IsVirtual).ThenBy(p => p.Name).ToList();
 }

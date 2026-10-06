@@ -30,6 +30,13 @@ internal static partial class SelfTest
     private static readonly DeviceCredentials Shop = new(Guid.NewGuid(), "not-a-real-secret", "TST001", "Campus Print Point", "https://example.invalid");
     private const string PrinterName = "HP LaserJet Pro M404";
     private static readonly Health Fine = new(new PrinterHealth(PrinterName, true, false, false, false, null), null, true);
+    private const string PdfPrinter = "Microsoft Print to PDF";
+    private static readonly Health NoPaper = new(new PrinterHealth(PdfPrinter, true, true, false, false, null, Prompts: true), null, true);
+    private static readonly PrinterInfo[] Installed =
+    [
+        new(PrinterName, false, false), new("Canon G3010 colour", false, false), new("Kyocera TASKalfa 3212i", false, true),
+        new("AutoPrint-Spike-PDF", true, false), new("Fax", true, false, Prompts: true), new(PdfPrinter, true, false, Prompts: true),
+    ];
 
     public static async Task RunAsync(App app, string folder, string? option)
     {
@@ -44,7 +51,7 @@ internal static partial class SelfTest
             Settings.Dir = Path.Combine(outDir, "data");                 // before anything else: the log and any temp file stay under the output folder
             if (option is not null && option.StartsWith("soak", StringComparison.OrdinalIgnoreCase))
                 await SoakAsync(log, int.TryParse(option.Split(':').ElementAtOrDefault(1), out var s) ? s : 60);
-            else if (option == "live") { if (!await LiveAsync(outDir, log)) code = 1; }
+            else if (option == "live") { if (!await LiveAsync(app, outDir, log)) code = 1; }
             else { Motion.Enabled = false; await ShotsAsync(outDir, log); }
         }
         catch (Exception e) { log.AppendLine("FAILED: " + e); code = 1; }
@@ -97,8 +104,20 @@ internal static partial class SelfTest
             ("12-printer-missing-blocks-approve", () => MainWith(w => w.Demo(Shop, State(true, W1), Fine with { Bw = PrinterHealth.Missing(PrinterName) }))),
             ("13-no-printer-chosen", () => MainWith(w => w.Demo(Shop, State(true, W1), null), printer: null)),
             ("14-print-program-missing", () => MainWith(w => w.Demo(Shop, State(true, W1, A1), Fine with { EngineOk = false }, notice: "No internet connection, so that did not go through. Nothing was changed. Try again in a moment."))),
-            ("15-settings", () => new SettingsWindow(new Settings { BlackWhitePrinter = PrinterName }, new SupportInfo(App.Version, "Campus Print Point (TST001)", "Connected. Last contact 10:29:54 AM"),
-                [new PrinterInfo(PrinterName, false, false), new PrinterInfo("Canon G3010 colour", false, false), new PrinterInfo("Microsoft Print to PDF", true, false)])),
+            ("15-settings", () => new SettingsWindow(new Settings { BlackWhitePrinter = PrinterName }, Support, Installed)),
+            ("17-settings-first-time-default-is-a-real-printer", () => new SettingsWindow(new Settings(), Support, [.. Installed.Reverse()])),
+            ("18-settings-no-paper-printer-chosen", () => new SettingsWindow(new Settings { BlackWhitePrinter = PdfPrinter, ColorPrinter = "Canon G3010 colour" }, Support, Installed)),
+            ("19-settings-printer-list-lines", PrinterListLines),
+            ("26-long-request-alone", () => MainWith(w => w.Demo(Shop, State(true, W2), Fine))),
+            ("20-queue-no-paper-printer-chosen", () => MainWith(w => w.Demo(Shop, State(true, W1, W3), NoPaper), printer: PdfPrinter)),
+            ("21-failed-run-says-why", () => MainWith(w => w.Demo(Shop, State(true, [W1, .. Done]), NoPaper,
+                runs: new RunResult(RunKind.Failed, Done[4].JobId, "engine_failed_nothing_in_spooler", "engine_timeout", PdfPrinter)), printer: PdfPrinter)),
+            ("22-finished-failed-says-why", () => MainWith(w => w.Demo(Shop, State(true, [W1, .. Done]), Fine, finishedTab: true,
+                runs: new RunResult(RunKind.Failed, Done[4].JobId, "engine_failed_nothing_in_spooler", "exit_code_1", PrinterName)))),
+            ("23-needs-attention-still-in-windows-queue", () => MainWith(w => w.Demo(Shop, State(true, N1, W1), Fine, stillQueued: N1.JobId,
+                runs: new RunResult(RunKind.Uncertain, N1.JobId, "still_in_queue_when_wait_ended", null, PrinterName)))),
+            ("24-print-again-while-still-in-windows-queue", () => MainWith(w => w.Demo(Shop, State(true, N1, W1), Fine, confirm: N1.JobId, stillQueued: N1.JobId))),
+            ("25-print-again-remove-failed", () => MainWith(w => w.Demo(Shop, State(true, N1, W1), Fine, confirm: N1.JobId, stillQueued: N1.JobId, removeFailed: true))),
             ("16-preview", () => new PreviewWindow(W2, null, null, null, TestPage.Build("AutoPrint preview self-test", "Made-up page. No customer document is used."))),
         };
         foreach (var (name, make) in scenes)
@@ -120,6 +139,20 @@ internal static partial class SelfTest
             }
         log.AppendLine("ok");
     }
+
+    /// <summary>The lines of the printer drop-down, drawn with the Settings window's own template. The drop-down itself is
+    /// a separate pop-up window that Windows keeps on a real screen, so it cannot be pictured off-screen.</summary>
+    private static Window PrinterListLines()
+    {
+        var settings = new SettingsWindow(new Settings { BlackWhitePrinter = PrinterName }, Support, Installed);
+        var list = new System.Windows.Controls.ItemsControl { ItemTemplate = (DataTemplate)settings.FindResource("PrinterLine"), Margin = new Thickness(16) };
+        foreach (var item in settings.BwBox.Items) list.Items.Add(item);
+        list.ItemContainerStyle = new Style(typeof(System.Windows.Controls.ContentPresenter)) { Setters = { new Setter(FrameworkElement.MarginProperty, new Thickness(10, 8, 10, 8)) } };
+        settings.Close();
+        return new Window { Width = 520, SizeToContent = SizeToContent.Height, Background = Brushes.White, Content = list, FontFamily = new FontFamily("Segoe UI"), FontSize = 14, UseLayoutRounding = true };
+    }
+
+    private static readonly SupportInfo Support = new(App.Version, "Campus Print Point (TST001)", "Connected. Last contact 10:29:54 AM");
 
     private static MainWindow MainWith(Action<MainWindow> fill, string? printer = PrinterName)
     {

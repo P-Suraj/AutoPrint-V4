@@ -25,7 +25,7 @@ The database port is blocked from the founder PC, so these tools go through the 
 ## 4. When something goes wrong
 | What you see | Likely cause | Fix |
 |---|---|---|
-| Report shows computer last seen long ago | PC off, asleep, or no internet | Ask the shopkeeper to wake the PC and check the status dot in the tray app (green online, orange offline). It reconnects by itself |
+| Report shows computer last seen long ago | PC off, asleep, or no internet | Ask the shopkeeper to wake the PC and check the status dot at the top of the AutoPrint window (green connected, orange offline). It reconnects by itself |
 | App shows a new pairing code instead of the queue | Credentials were removed or the computer was disconnected on the dashboard | Shopkeeper types the new code on their dashboard |
 | Customer sees "The shop's printer computer looks offline" | App has been offline for 45+ seconds (the customer can still send; the job waits) | As above |
 | Customer sees "This shop is not taking orders right now" | The shop is switched off | `PY scripts/ap_remote.py shop-on ABC123` (and `shop-off ABC123` to stop taking orders; nothing is deleted, jobs already sent still print, and the shopkeeper's dashboard link stops working while it is off). **Not yet run live** |

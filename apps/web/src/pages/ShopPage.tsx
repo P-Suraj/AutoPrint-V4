@@ -4,7 +4,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { ApiError, api, uploadPdf, type Schemas } from "../api";
 import { estimate, rupees, type Options, type Rates } from "../estimate";
 import { YourOrders } from "../orders";
-import { PdfPreview, inspectPdf } from "../preview";
+import { PDF_PROBLEM, PdfPreview, inspectPdf, type PdfProblem } from "../preview";
 import { clearDraft, loadDraft, loadSecret, rememberOrder, saveDraft, saveSecret } from "../store";
 import { rememberShop } from "../shopCode";
 import { Icon, Segmented, Stepper, Steps, TopBar, fileSize } from "../ui";
@@ -45,6 +45,7 @@ function ShopFlow({ shopCode }: { shopCode: string }) {
   const [loadError, setLoadError] = useState<LoadError | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [file, setFile] = useState<File | null>(null);
+  const [unprintable, setUnprintable] = useState<PdfProblem | null>(null);   // the chosen file cannot be printed: say why, offer nothing else
   const [busy, setBusy] = useState<string | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -103,7 +104,7 @@ function ShopFlow({ shopCode }: { shopCode: string }) {
   };
 
   function choose(f: File | null) {
-    setError(null); setUp(null); setQuote(null); setFile(null);
+    setError(null); setUp(null); setQuote(null); setFile(null); setUnprintable(null);
     if (!f) return;
     if (f.type !== "application/pdf" && !f.name.toLowerCase().endsWith(".pdf")) { setError("Only PDF files can be printed."); return; }
     if (f.size === 0) { setError("This file is empty. Choose another PDF."); return; }
@@ -130,8 +131,7 @@ function ShopFlow({ shopCode }: { shopCode: string }) {
   const upload = () => step("Checking your file…", async () => {
     if (!file) return;
     const seen = await inspectPdf(file);
-    if (seen.kind === "encrypted") throw new ApiError("pdf_encrypted", "This PDF is password-protected. Remove the password and try again.");
-    if (seen.kind === "invalid") throw new ApiError("pdf_unreadable", "This PDF could not be read. Try saving or exporting it again.");
+    if (seen.kind === "encrypted" || seen.kind === "invalid") { setUnprintable(seen.kind); return; }
     // ("unknown" goes on: this browser could not read PDFs at all, and the server checks every file anyway.)
     // One order per visit: trying again after a failed upload reuses it instead of starting (and counting) a new one.
     const doc = { file_name: file.name.slice(0, 255), byte_size: file.size, content_type: "application/pdf" };
@@ -218,9 +218,9 @@ function ShopFlow({ shopCode }: { shopCode: string }) {
               ? <><strong className="ellipsis">{file.name}</strong><small>{fileSize(file.size)} · tap to choose another</small></>
               : <><strong>Choose a PDF</strong><small>Tap to pick a file from your phone</small></>}
           </label>
-          {error && <p role="alert" className="error">{error}</p>}
-          {file && <PdfPreview file={file} />}
-          {file && (
+          {(error || unprintable) && <p role="alert" className="error">{error ?? PDF_PROBLEM[unprintable!]}</p>}
+          {file && !unprintable && <PdfPreview file={file} onProblem={setUnprintable} />}
+          {file && !unprintable && (
             <button className="primary big" onClick={upload} disabled={!!busy}>
               {busy ? <><i className="spinner" />{busy}{percent !== null && percent < 100 ? ` ${percent}%` : ""}</> : <>Continue<Icon.arrow size={20} /></>}
             </button>

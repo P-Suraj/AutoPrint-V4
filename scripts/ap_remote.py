@@ -11,8 +11,11 @@ Reads AUTOPRINT_V4_MAINTENANCE_TOKEN from .env. Nothing here prints a secret exc
   PY scripts/ap_remote.py shop-link ABC123 --label owner                      private dashboard link for the shopkeeper
   PY scripts/ap_remote.py revoke-link ABC123 --label owner                    revoke that shop's logins with that label
   PY scripts/ap_remote.py purge ABC123 K7QD                                   delete the files of one finished order now (customer request)
+  PY scripts/ap_remote.py purge ABC123 K7QD --which 2                         ...of the order before the most recent one with that code
   PY scripts/ap_remote.py add-email ABC123 owner@example.com --label owner   allow this email to sign in to the shop dashboard
   PY scripts/ap_remote.py remove-email owner@example.com                       stop allowing it
+  PY scripts/ap_remote.py status                                              is the site up, can it reach the database, which database updates are applied
+  PY scripts/ap_remote.py migrate                                             apply the database updates that are still pending, and list them
 
 Reports are in scripts/ap_report.py (one shop in detail, or --all).
 
@@ -51,6 +54,51 @@ def post(path: str, body: dict) -> dict:
 
 def get(path: str) -> dict:
     return _answer(HTTP.get(BASE + path, headers={"X-Maintenance-Token": token()}, timeout=60))
+
+
+def health(path: str) -> str:
+    """One line about a public health address. Never raises: `status` must still print the rest when the site is down."""
+    try:
+        r = HTTP.get(BASE + path, timeout=30)
+    except httpx.HTTPError as exc:
+        return f"NO ANSWER ({type(exc).__name__})"
+    try:
+        body = r.json()
+    except ValueError:
+        body = {}
+    return f"{body.get('status', 'no status in the answer')} (HTTP {r.status_code})"
+
+
+def render_status(d: dict) -> str:
+    out = [f"Database updates applied: {len(d['applied'])}"]
+    out += [f"    {m['id']:<44}{str(m['applied_at'])[:16].replace('T', ' ')}" for m in d["applied"]]
+    if d["pending"]:
+        out.append(f"PENDING, not applied yet: {len(d['pending'])}")
+        out += [f"    {m}" for m in d["pending"]]
+        out.append("Apply them with:  PY scripts/ap_remote.py migrate")
+    else:
+        out.append("Nothing pending: the database matches the code that is live.")
+    if d["not_in_this_deployment"]:
+        out.append("WARNING: the database has updates the live code does not know (an older version of the site is live):")
+        out += [f"    {m}" for m in d["not_in_this_deployment"]]
+    return "\n".join(out)
+
+
+def render_migrate(d: dict) -> str:
+    if not d["applied_now"]:
+        return f"Nothing to apply. The database already has all {len(d['applied_total'])} updates (latest: {d['applied_total'][-1]})."
+    return "\n".join([f"Applied now: {len(d['applied_now'])}"] + [f"    {m}" for m in d["applied_now"]]
+                     + [f"The database now has {len(d['applied_total'])} updates (latest: {d['applied_total'][-1]})."])
+
+
+def render_purge(r: dict) -> str:
+    out = [f"files deleted now {r['documents_deleted_now']}, files remaining {r['documents_remaining']}"]
+    if r["orders_matched"] > 1:
+        out.append(f"NOTE: {r['orders_matched']} orders of this shop used this code in the last 30 days. Only ONE was purged "
+                   "(marked below). If the customer meant another one, run the command again with --which N.")
+        out += [f"    --which {m['which']}   started {str(m['created_at'])[:16].replace('T', ' ')} UTC   {m['status']}"
+                + ("   <- purged now" if m["purged_now"] else "") for m in r["matches"]]
+    return "\n".join(out)
 
 
 def rupees(paise: int) -> str:
@@ -99,6 +147,9 @@ def main(argv=None) -> int:
     a = sub.add_parser("rename"); a.add_argument("code"); a.add_argument("name")
     a = sub.add_parser("shop-link"); a.add_argument("code"); a.add_argument("--label", default="owner")
     a = sub.add_parser("purge"); a.add_argument("code"); a.add_argument("order", help="the 4-character order code the customer sees")
+    a.add_argument("--which", type=int, default=1, help="1 = the most recent order with that code (default), 2 = the one before, ...")
+    sub.add_parser("status")
+    sub.add_parser("migrate")
     a = sub.add_parser("add-email"); a.add_argument("code"); a.add_argument("email"); a.add_argument("--label", default="owner")
     a = sub.add_parser("remove-email"); a.add_argument("email")
     a = sub.add_parser("revoke-link"); a.add_argument("code"); a.add_argument("--label", required=True)
@@ -132,14 +183,19 @@ def main(argv=None) -> int:
         print("Private dashboard link (shown once; hand it over in person or in a private chat):")
         print(f"  {BASE}/shop#key={r['key']}")
     elif args.cmd == "purge":
-        r = post("/v1/internal/purge", {"shop_code": args.code, "order": args.order})
-        print(f"orders matched {r['orders_matched']}, files deleted now {r['documents_deleted_now']}, files remaining {r['documents_remaining']}")
+        print(render_purge(post("/v1/internal/purge", {"shop_code": args.code, "order": args.order, "which": args.which})))
     elif args.cmd == "add-email":
         post("/v1/internal/shop-email", {"shop_code": args.code, "email": args.email, "label": args.label})
         print(f"{args.email} can now sign in to the dashboard of shop {args.code.upper()} at {BASE}/shop")
     elif args.cmd == "remove-email":
         post("/v1/internal/shop-email", {"email": args.email, "remove": True})
         print("removed")
+    elif args.cmd == "status":
+        print("Site:", health("/health"))
+        print("Site can reach the database:", health("/health/ready"))
+        print(render_status(get("/v1/internal/status")))
+    elif args.cmd == "migrate":
+        print(render_migrate(post("/v1/internal/migrate", {})))
     elif args.cmd == "revoke-link":
         print(post("/v1/internal/shop-login", {"shop_code": args.code, "revoke_label": args.label}))
     return 0

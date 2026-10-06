@@ -449,7 +449,7 @@ public class ShopkeeperTextTests
         var done = Job(status: JobStatus.Completed);
 
         Assert.Equal(AlertKind.None, policy.Next([done], Now).Kind);                                     // nothing waiting: silence
-        var first = policy.Next([a, b, done], Now);                                                      // app start with two waiting, or two together
+        var first = policy.Next([a, b, done], Now);                                                      // two arrive together
         Assert.Equal((AlertKind.New, 2), (first.Kind, first.Count));                                     // ONE alert, not two
         Assert.Equal(AlertKind.None, policy.Next([a, b], Now.AddSeconds(10)).Kind);                      // every later poll: quiet
         Assert.Equal(AlertKind.None, policy.Next([a, b], Now.AddSeconds(110)).Kind);

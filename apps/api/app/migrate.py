@@ -12,6 +12,17 @@ import psycopg2
 MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "supabase" / "migrations"
 
 
+def migration_status(db) -> dict:
+    """Read-only: which of this deployment's migration files the database has recorded, and which it has not.
+    `not_in_this_deployment` lists recorded ids with no file here (an older deployment looking at a newer database)."""
+    files = [f.stem for f in sorted(MIGRATIONS_DIR.glob("*.sql"))]
+    rows = db.rows("SELECT id, applied_at FROM ap.schema_migrations ORDER BY id")
+    done = {r[0] for r in rows}
+    return {"applied": [{"id": r[0], "applied_at": r[1]} for r in rows],
+            "pending": [f for f in files if f not in done],
+            "not_in_this_deployment": sorted(done - set(files))}
+
+
 def apply_pending(database_url: str) -> dict:
     files = sorted(MIGRATIONS_DIR.glob("*.sql"))
     if not files:

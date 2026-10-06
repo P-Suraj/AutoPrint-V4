@@ -28,6 +28,9 @@ public sealed class FakeSpooler(FakeScenario scenario = FakeScenario.Success, in
     public FakeScenario Scenario { get; set; } = scenario;
     public HashSet<string> Printers { get; } = ["Test Printer"];
     public List<PrintRequest> Submitted { get; } = [];
+    /// <summary>Removing a job does nothing, as when Windows refuses or the job hangs in "Deleting" at a printer that is off.</summary>
+    public bool RemoveFails { get; set; }
+    public int RemoveCount { get; private set; }
     public int SubmitCount => Submitted.Count;
 
     public Task<SubmitResult> SubmitAsync(PrintRequest request, CancellationToken ct)
@@ -82,5 +85,13 @@ public sealed class FakeSpooler(FakeScenario scenario = FakeScenario.Success, in
 
     private static SpoolerJobInfo Info(Item j, string[] flags, int pages) => new(j.Id, j.Name, flags, pages, j.Pages);
 
-    public void RemoveJob(string printer, int jobId) => _jobs.TryRemove(jobId, out _);
+    public void RemoveJob(string printer, int jobId)
+    {
+        RemoveCount++;
+        if (RemoveFails) throw new InvalidOperationException("spooler_remove_failed");
+        _jobs.TryRemove(jobId, out _);
+    }
+
+    /// <summary>The printer came back and worked off its queue: every job leaves by itself.</summary>
+    public void DrainQueue() => _jobs.Clear();
 }

@@ -1,13 +1,15 @@
 // In-browser preview of the customer's own file (decision D-9). Nothing is uploaded to render this.
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { useEffect, useRef, useState } from "react";
+// only the address of the worker script (a short string); the script itself is fetched when pdf.js starts
+import workerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
 
 // pdf.js is large. It is loaded only when a file is chosen, so the first screen stays small on mobile data.
 // The "legacy" build is the one that runs on phones a few years old (the default build needs a 2024 browser);
 // parsing happens in its worker, off the main thread.
 async function loadPdfjs() {
-  const [pdfjs, worker] = await Promise.all([import("pdfjs-dist/legacy/build/pdf.mjs"), import("pdfjs-dist/legacy/build/pdf.worker.min.mjs?url")]);
-  pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
   return pdfjs;
 }
 
@@ -36,11 +38,21 @@ export async function inspectPdf(file: File): Promise<PdfCheck> {
   } catch (e) { return classifyPdfError(e); }
 }
 
-export function PdfPreview({ file }: { file: File }) {
+/** What the customer is told about a file that cannot be printed. One wording, wherever it is found out. */
+export const PDF_PROBLEM = {
+  encrypted: "This PDF is password-protected. Remove the password and try again.",
+  invalid: "This PDF could not be read. Try saving or exporting it again.",
+} as const;
+export type PdfProblem = keyof typeof PDF_PROBLEM;
+
+/** `onProblem` is told when the file itself cannot be printed; the page that asked then says so in its own place. */
+export function PdfPreview({ file, onProblem }: { file: File; onProblem?: (kind: PdfProblem) => void }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
   const [page, setPage] = useState(1);
   const [failed, setFailed] = useState<PdfCheck["kind"] | null>(null);
+  const told = useRef(onProblem);
+  told.current = onProblem;
 
   useEffect(() => {
     let alive = true;
@@ -49,7 +61,12 @@ export function PdfPreview({ file }: { file: File }) {
     Promise.all([loadPdfjs(), file.arrayBuffer()]).then(([pdfjs, buf]) => pdfjs.getDocument({ data: new Uint8Array(buf) }).promise).then((d) => {
       loaded = d;
       if (alive) { setDoc(d); setPage(1); } else d.destroy();
-    }).catch((e) => alive && setFailed(classifyPdfError(e).kind));
+    }).catch((e) => {
+      if (!alive) return;
+      const kind = classifyPdfError(e).kind;
+      setFailed(kind);
+      if (kind === "encrypted" || kind === "invalid") told.current?.(kind);
+    });
     return () => { alive = false; loaded?.destroy(); };
   }, [file]);
 
@@ -75,7 +92,7 @@ export function PdfPreview({ file }: { file: File }) {
     return () => { cancelled = true; task?.cancel(); };
   }, [doc, page]);
 
-  if (failed === "encrypted") return <p className="note">This PDF is password-protected, so the shop could not print it. Remove the password and choose it again.</p>;
+  if (failed === "encrypted" || failed === "invalid") return onProblem ? null : <p className="note">{PDF_PROBLEM[failed]}</p>;
   if (failed) return <p className="note">No preview for this file here. You can still continue; the file is checked when it is uploaded.</p>;
   return (
     <div className="preview">

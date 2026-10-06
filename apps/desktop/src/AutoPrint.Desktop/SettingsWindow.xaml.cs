@@ -29,10 +29,11 @@ public partial class SettingsWindow : Window
         DisconnectText.Text = $"To disconnect this computer from the shop: open your private shop link, find “{PcText.Text}” under “Your computers” and press Disconnect. "
             + "This app then shows a new code. It cannot be done from here, so that only the shop's owner can do it.";
         BwBox.SelectionChanged += (_, _) => Warn();
+        ColorBox.SelectionChanged += (_, _) => Warn();
         if (demoPrinters is not null) Fill(demoPrinters);
         else Loaded += async (_, _) =>
         {
-            BwBox.IsEnabled = ColorBox.IsEnabled = TestBtn.IsEnabled = false; BwWarn.Text = "Looking for printers…"; BwWarn.Visibility = Visibility.Visible;
+            BwBox.IsEnabled = ColorBox.IsEnabled = TestBtn.IsEnabled = TestColorBtn.IsEnabled = false; BwWarn.Text = "Looking for printers…"; BwWarn.Visibility = Visibility.Visible;
             try { Fill(await Task.Run(PrinterCatalog.List)); }             // never on the window's thread: a sleeping network printer can take seconds
             catch (Exception e) { App.Log("printer list: " + SafeText.Describe(e)); BwWarn.Text = "Windows could not list the printers. Close this window and try again."; BwWarn.Visibility = Visibility.Visible; }
         };
@@ -41,34 +42,52 @@ public partial class SettingsWindow : Window
     private void Fill(IReadOnlyList<PrinterInfo> printers)
     {
         _printers = printers;
-        foreach (var p in printers) { BwBox.Items.Add(p.Name); ColorBox.Items.Add(p.Name); }
-        ColorBox.Items.Insert(0, Same);
+        // real printers first (the list comes sorted that way); the ones that make no paper say so in the list itself
+        foreach (var p in printers) { BwBox.Items.Add(new PrinterChoice(p.Name, Mark(p))); ColorBox.Items.Add(new PrinterChoice(p.Name, Mark(p))); }
+        ColorBox.Items.Insert(0, new PrinterChoice(Same, ""));
         // a printer that was chosen but has since gone stays visible, so the warning can name it
-        if (_settings.BlackWhitePrinter is { Length: > 0 } bw && !BwBox.Items.Contains(bw)) BwBox.Items.Add(bw);
-        BwBox.SelectedItem = _settings.BlackWhitePrinter ?? printers.FirstOrDefault(p => !p.IsVirtual && !p.IsOffline)?.Name;
-        ColorBox.SelectedItem = _settings.ColorPrinter is { } c && ColorBox.Items.Contains(c) ? c : Same;
-        BwBox.IsEnabled = ColorBox.IsEnabled = TestBtn.IsEnabled = true;
+        if (_settings.BlackWhitePrinter is { Length: > 0 } bw && printers.All(p => p.Name != bw)) BwBox.Items.Add(new PrinterChoice(bw, "not installed any more"));
+        // nothing chosen yet: offer a real printer, never one that makes a file or opens a window
+        BwBox.SelectedValue = _settings.BlackWhitePrinter ?? PrinterCatalog.DefaultChoice(printers);
+        ColorBox.SelectedValue = _settings.ColorPrinter is { } c && printers.Any(p => p.Name == c) ? c : Same;
+        BwBox.IsEnabled = ColorBox.IsEnabled = TestBtn.IsEnabled = TestColorBtn.IsEnabled = true;
         Warn();
     }
 
+    private static string Mark(PrinterInfo p) => p.Prompts ? "no paper: makes a file, may open a window" : p.IsVirtual ? "no paper: makes a file" : p.IsOffline ? "offline" : "";
+
     private void Warn()
     {
-        var name = BwBox.SelectedItem as string;
+        var name = BwBox.SelectedValue as string;
         var p = _printers.FirstOrDefault(x => x.Name == name);
         (BwWarn.Text, string colour) = name is null ? ("Choose the printer your customers' documents should come out of.", "Muted")
             : p is null ? ("This printer is not installed on this computer any more. Choose another one.", "Err")
-            : p.IsVirtual ? ("This one makes a file, not paper.", "Warn")
+            : p.IsVirtual ? (PrinterCatalog.Warning(p.Name, true, p.Prompts) + " Choose your real printer for customer prints.", "Warn")
             : p.IsOffline ? ("Windows says this printer is offline. Check that it is switched on and connected.", "Warn")
             : ("", "Muted");
         BwWarn.Foreground = Ui.Brush(colour);
         BwWarn.Visibility = BwWarn.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+
+        var colourPrinter = ColorBox.SelectedValue is string cn && cn != Same ? _printers.FirstOrDefault(x => x.Name == cn) : null;
+        ColorWarn.Text = colourPrinter is { IsVirtual: true } v ? PrinterCatalog.Warning(v.Name, true, v.Prompts) + " Colour prints would go there." : "";
+        ColorWarn.Visibility = ColorWarn.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        // a second machine gets its own test: shown only when the colour printer really is a different one
+        TestColorBtn.Visibility = ColorBox.SelectedValue is string other && other != Same && other != name ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private async void OnTest(object sender, RoutedEventArgs e)
+    private void OnTest(object sender, RoutedEventArgs e) => TestAsync(BwBox.SelectedValue as string, colour: false);
+
+    /// <summary>The colour printer is tested on its own: it is a different machine, and the first button says nothing about it.</summary>
+    private void OnTestColour(object sender, RoutedEventArgs e) => TestAsync(ColorBox.SelectedValue is string c && c != Same ? c : null, colour: true);
+
+    private async void TestAsync(string? name, bool colour)
     {
-        var name = BwBox.SelectedItem as string;
+        Result.Visibility = Visibility.Visible;
         if (name is null) { Result.Text = "Choose a printer first."; return; }
-        TestBtn.IsEnabled = false; Result.Foreground = Ui.Brush("Muted"); Result.Text = "Sending a test page…";
+        bool prompts = _printers.FirstOrDefault(x => x.Name == name) is { Prompts: true };
+        string which = colour ? "the colour printer" : "the printer";
+        TestBtn.IsEnabled = TestColorBtn.IsEnabled = false; Result.Foreground = Ui.Brush("Muted");
+        Result.Text = prompts ? "Sending a test page. A window may open on this computer: answer it or close it." : $"Sending a test page to {which}…";
         var dir = Path.Combine(Settings.Dir, "testpage");                  // its own folder: a customer job cleaning the work folder never touches it
         var jobName = "aptest_" + Guid.NewGuid().ToString("N");
         var file = Path.Combine(dir, jobName + ".pdf");
@@ -78,20 +97,21 @@ public partial class SettingsWindow : Window
             {
                 Directory.CreateDirectory(dir);
                 await File.WriteAllBytesAsync(file, TestPage.Build("AutoPrint test page", DateTime.Now.ToString("g")));
-                return await new SumatraEngine(MainWindow.SumatraPath).SubmitAsync(new PrintRequest(file, name, new PrintOptions(1, false, false, null), jobName, 1), CancellationToken.None);
+                return await new SumatraEngine(MainWindow.SumatraPath).SubmitAsync(new PrintRequest(file, name, new PrintOptions(1, colour, false, null), jobName, 1), CancellationToken.None);
             });
             Result.Foreground = Ui.Brush(r.Accepted ? "Ink" : "Err");
-            Result.Text = r.Accepted ? "Sent to the printer. Check that a page came out." : r.Error switch
+            Result.Text = r.Accepted ? $"Sent to {which} “{name}”. Check that a page came out there." : r.Error switch
             {
                 SumatraEngine.NotReadyReason => "AutoPrint's print program is missing or damaged. Install AutoPrint again.",
                 "printer_not_found" => "Windows cannot find this printer any more. Choose another one.",
-                "engine_timeout" => "The printer did not take the page. Check that it is switched on and connected.",
+                "engine_timeout" => prompts ? "Nothing was printed. This one makes a file and waits for a window to be answered. Choose your real printer."
+                    : "The printer did not take the page. Check that it is switched on and connected, and that no window on this computer is waiting for an answer.",
                 _ => "It did not work. Check the printer and try again.",
             };
             if (!r.Accepted) App.Log("test page: " + r.Error);
         }
         catch (Exception x) { App.Log("test page: " + SafeText.Describe(x)); Result.Foreground = Ui.Brush("Err"); Result.Text = "It did not work. Check the printer and try again."; }
-        finally { await WorkFiles.DeleteAsync(file); TestBtn.IsEnabled = true; }
+        finally { await WorkFiles.DeleteAsync(file); TestBtn.IsEnabled = TestColorBtn.IsEnabled = true; }
     }
 
     private void OnHear(object sender, RoutedEventArgs e) => Alerts.Chime();
@@ -104,12 +124,18 @@ public partial class SettingsWindow : Window
 
     private void OnSave(object sender, RoutedEventArgs e)
     {
-        _settings.BlackWhitePrinter = BwBox.SelectedItem as string;
-        _settings.ColorPrinter = ColorBox.SelectedItem as string is { } c && c != Same ? c : null;
+        _settings.BlackWhitePrinter = BwBox.SelectedValue as string;
+        _settings.ColorPrinter = ColorBox.SelectedValue as string is { } c && c != Same ? c : null;
         _settings.StartWithWindows = StartupBox.IsChecked == true;
         _settings.SoundOn = SoundBox.IsChecked == true;
         if (!_settings.Save()) { SaveNote.Text = "The settings could not be saved on this computer. They are used until AutoPrint closes."; return; }
         Settings.ApplyStartup(_settings.StartWithWindows);
         DialogResult = true;
     }
+}
+
+/// <summary>One line of a printer list: the name, and a few quiet words when it is not a printer to rely on.</summary>
+public sealed record PrinterChoice(string Name, string Note)
+{
+    public string Gap => Note.Length > 0 ? "   " : "";
 }

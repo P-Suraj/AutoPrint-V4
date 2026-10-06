@@ -3,10 +3,11 @@ using AutoPrint.Core.Shop;
 namespace AutoPrint.Core.Agent;
 
 /// <param name="LastPollAt">Time of the last successful contact with the server (this PC's clock).</param>
+/// <param name="LastRun">How the most recent print run on this PC ended (not "no job"). Kept only in memory; lets the window say why.</param>
 /// <param name="CannotPrint">Set when this PC must not print at all (its print record cannot be written). Approving is pointless until it clears.</param>
 public sealed record AgentState(
     bool Online, bool NeedsPairing, QueueSnapshot? Queue, Activity? Current, string? Problem, DateTimeOffset? LastPollAt,
-    string? CannotPrint = null);
+    string? CannotPrint = null, RunResult? LastRun = null);
 
 /// <summary>
 /// Keeps the shop PC connected. One request every ~10 s does both heartbeat and queue refresh; approving a job
@@ -111,7 +112,7 @@ public sealed class AgentService
     {
         try
         {
-            await _orchestrator.RecoverAsync(ct);
+            await _orchestrator.RecoverAsync(ct, r => Publish(s => s with { LastRun = r }));
             if (_state.CannotPrint is not null) Publish(s => s with { CannotPrint = null });
         }
         catch (Exception e) when (e is not (OperationCanceledException or ApiRejectedException or ServerUnreachableException))
@@ -134,6 +135,7 @@ public sealed class AgentService
                 if (run.Reason == PrintOrchestrator.JournalUnavailable) { Publish(s => s with { CannotPrint = JournalFaultText }); break; }
                 if (run.Kind == RunKind.NoJob) break;
                 ran = true;
+                Publish(s => s with { LastRun = run });
                 Wake();
             }
         }

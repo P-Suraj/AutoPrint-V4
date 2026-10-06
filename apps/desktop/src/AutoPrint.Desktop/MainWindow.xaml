@@ -26,7 +26,9 @@
         </Border>
 
         <!-- ============================================================ what needs saying right now -->
-        <StackPanel x:Name="Banners" Grid.Row="1" Margin="24,14,24,0"/>
+        <ScrollViewer x:Name="BannerArea" Grid.Row="1" Margin="24,14,24,0" VerticalScrollBarVisibility="Auto" Focusable="False">
+            <StackPanel x:Name="Banners"/>
+        </ScrollViewer>
 
         <!-- ============================================================ starting, or something is wrong before the queue can show -->
         <StackPanel x:Name="StartView" Grid.Row="2" VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="460" Margin="24" Visibility="Collapsed">

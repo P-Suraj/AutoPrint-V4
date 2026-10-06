@@ -45,7 +45,7 @@ public partial class PreviewWindow : Window
         InitializeComponent();
         Code.Text = job.OrderShortCode;
         Title1.Text = job.DocumentName; Title1.ToolTip = job.DocumentName;
-        Detail.Text = $"{JobText.Pages(job)}   ·   {JobText.Plural(job.Copies, "copy", "copies")}   ·   {JobText.Colour(job)}   ·   {JobText.SidesChoice(job)}";
+        foreach (var fact in new[] { JobText.Pages(job), JobText.Plural(job.Copies, "copy", "copies"), JobText.Colour(job), JobText.SidesChoice(job) }) Detail.Add(fact, "Soft");
         AmountText.Text = JobText.Money(job.AmountPaise);
         Height = Math.Min(Height, SystemParameters.WorkArea.Height); Width = Math.Min(Width, SystemParameters.WorkArea.Width);
         JobChanged(job);

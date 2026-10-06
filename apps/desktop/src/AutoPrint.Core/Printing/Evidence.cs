@@ -65,20 +65,49 @@ public static class OutcomeRules
 
 public static class PageRange
 {
-    private static readonly Regex Shape = new(@"^\d+(-\d+)?(\s*,\s*\d+(-\d+)?)*$", RegexOptions.Compiled);
+    /// <summary>Reason reported when the page range of a job is not a well-formed range: the job fails unprinted.</summary>
+    public const string InvalidReason = "page_range_invalid";
+
+    // ASCII digits only ([0-9], never \d, which also matches digits of other scripts), at most five per number, and
+    // \z, not $, so a trailing line break does not pass. Plain spaces and tabs may surround a comma, nothing else.
+    private static readonly Regex Shape = new(@"\A[0-9]{1,5}(-[0-9]{1,5})?([ \t]*,[ \t]*[0-9]{1,5}(-[0-9]{1,5})?)*\z", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// The range exactly as it may be handed to the print program: "1-3,5", only ASCII digits, commas and hyphens.
+    /// True with null when there is no range (print everything). False when the text is not a well-formed range
+    /// (other characters, digits of another script, a page 0, an end before its start): such a job must not be
+    /// printed, because a range the print program cannot read is ignored and every page comes out.
+    /// </summary>
+    public static bool TryNormalize(string? range, out string? normalized)
+    {
+        normalized = null;
+        if (range is null || range.All(c => c is ' ' or '\t')) return true;
+        var text = range.Trim(' ', '\t');
+        if (!Shape.IsMatch(text)) return false;
+        var parts = new List<string>();
+        foreach (var part in text.Split(','))
+        {
+            var bounds = part.Trim(' ', '\t').Split('-');
+            int start = int.Parse(bounds[0], System.Globalization.CultureInfo.InvariantCulture);
+            int end = bounds.Length == 1 ? start : int.Parse(bounds[1], System.Globalization.CultureInfo.InvariantCulture);
+            if (start < 1 || end < start) return false;
+            parts.Add(bounds.Length == 1 ? $"{start}" : $"{start}-{end}");
+        }
+        normalized = string.Join(",", parts);
+        return true;
+    }
 
     /// <summary>Number of unique pages selected, or null when the text is not a valid range for this document.</summary>
     public static int? SelectedCount(string? range, int pageCount)
     {
-        if (string.IsNullOrWhiteSpace(range)) return pageCount;
-        var text = range.Trim();
-        if (!Shape.IsMatch(text)) return null;
+        if (!TryNormalize(range, out var text)) return null;
+        if (text is null) return pageCount;
         var pages = new HashSet<int>();
         foreach (var part in text.Split(','))
         {
-            var bounds = part.Trim().Split('-');
-            int start = int.Parse(bounds[0]);
-            int end = bounds.Length == 1 ? start : int.Parse(bounds[1]);
+            var bounds = part.Split('-');
+            int start = int.Parse(bounds[0], System.Globalization.CultureInfo.InvariantCulture);
+            int end = bounds.Length == 1 ? start : int.Parse(bounds[1], System.Globalization.CultureInfo.InvariantCulture);
             if (start < 1 || end < start || end > pageCount) return null;
             for (int p = start; p <= end; p++) pages.Add(p);
         }

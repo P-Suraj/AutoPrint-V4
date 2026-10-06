@@ -87,7 +87,8 @@ public class RealPrinterTests
     {
         Assert.Equal("1x,monochrome,simplex,fit,paper=a4", SumatraEngine.SettingsFor(new PrintOptions(1, false, false, null)));
         Assert.Equal("3x,color,duplexlong,fit,paper=a4,1-3,5", SumatraEngine.SettingsFor(new PrintOptions(3, true, true, "1-3,5")));
-        Assert.Equal("2x,monochrome,simplex,fit,paper=a4,1-2", SumatraEngine.SettingsFor(new PrintOptions(2, false, false, "1-2; calc.exe")));
+        Assert.Equal("2x,monochrome,simplex,fit,paper=a4,1-2,7", SumatraEngine.SettingsFor(new PrintOptions(2, false, false, " 1-2 , 7 ")));
+        Assert.Null(SumatraEngine.SettingsFor(new PrintOptions(2, false, false, "1-2; calc.exe")));      // not cleaned up: refused (see PageRangeGuardTests)
     }
 
     [Fact]

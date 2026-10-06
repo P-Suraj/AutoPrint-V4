@@ -74,3 +74,14 @@ A customer sends a PDF from a phone (no account); the shopkeeper approves it in 
 - Claude Code runs on the founder laptop; if it sleeps, work pauses. Cloud sessions cannot reach the printer or local files.
 
 Migration 0009 is applied live (6 Oct 2026); email sign-in stays inactive until the Supabase settings and the publishable key are added. Migration 0010 (email sign-ins expire after 30 days and are revoked with their address) is written and tested locally, not applied live.
+
+## STOPPED MID-WORK on 6 October 2026 (usage budget ran out): read this before anything else
+
+- `main` (pushed, live) is verified: Windows app 4.0.1, website and API of commit `f04edf8`, plus documentation commits.
+- **Branch `wip/2026-10-06-unverified` holds unfinished, UNTESTED work** from four agents that were stopped mid-task. It may not build. Do not merge or deploy it as it is. For each area: run its tests, finish or discard, then merge.
+  - `apps/web`: browser tests for the order card, draft restore, double-tap, PDF error messages; layout fixes for small phones; Vite pre-bundling fix. Brief: finish items 1 to 5 in the "Web verification" task (browser tests, WebKit run, layout walk at 320/360/412 px, load measurements).
+  - `apps/api`, `supabase/migrations/0014+`, `scripts`: tests for the connection pool, 503 mapping, claim failure, cleanup isolation, lock order; fixes for NUL bytes, `claim_next_job` deadlock, statement timeout; and the security-review fixes (queue flood, page-range parsing, blanking file name and hash on delete, `job_document` after `delete_after`, purge by code, limiter salt); `migrate` and `status` commands in `ap_remote.py`. Check each migration file is complete before trusting it.
+  - `apps/desktop`: guard against printers that prompt or make a file (Microsoft Print to PDF caused the founder's failed job), plain failure messages, ASCII-only page range, the duplicate-print fix for "Print again" while the old job is still in the Windows queue, colour test page, extended self-test.
+  - `e2e/load_test.py`: a local load test; no numbers were reported.
+- Founder actions still open: apply migrations 0010 to 0013 live (command in the chat of 6 Oct; `/v1/internal/migrate` with the maintenance token), then run `e2e/run_live_e2e.py`; add the GitHub secret `AUTOPRINT_MAINTENANCE_TOKEN`; in Supabase set the `print-documents` bucket to 25 MB and `application/pdf` only; choose the real printer in the Windows app (it is set to Microsoft Print to PDF).
+- Payments: parked by the founder until the core work lands. Design and 14 founder questions are in `docs/PAYMENTS_DESIGN.md`.

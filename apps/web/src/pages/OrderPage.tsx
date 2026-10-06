@@ -155,13 +155,17 @@ export default function OrderPage() {
   }
 
   const live = !FINAL.has(order.status);
+  // Declined, cancelled or run out of time: there is nothing to collect, so no code to say and nothing to pay.
+  // A print the shop could not make keeps its code (the customer is sent to the counter) but asks for no money.
+  const calledOff = order.jobs.length > 0 && order.jobs.every((j) => TONE[j.status] === "off");
+  const nothingToPay = calledOff || (order.jobs.length > 0 && order.jobs.every((j) => TONE[j.status] === "off" || j.status === "failed"));
   return (
     <main>
       <TopBar />
       <header className={`ticket${allDone ? " done" : ""}`}>
         <p className="eyebrow">{order.shop_name}</p>
         <h1>Order <span className="code">{order.short_code}</span></h1>
-        <p className="ticket-hint">Say this code at the counter</p>
+        {!calledOff && <p className="ticket-hint">Say this code at the counter</p>}
       </header>
       {stale && <p className="note" role="status">Updates are delayed. Check your connection; this page keeps trying by itself.</p>}
       {order.jobs.length === 0 && <p className="note">This order has not been sent to the shop yet.</p>}
@@ -169,7 +173,7 @@ export default function OrderPage() {
         {order.jobs.map((j) => <Job key={j.job_id} status={j.status} message={j.customer_message} name={j.document_name} />)}
       </ul>
       <div className="order-foot">
-        {order.amount_paise != null && <p className="pay"><strong>{rupees(order.amount_paise)}</strong> · pay at the counter</p>}
+        {order.amount_paise != null && !nothingToPay && <p className="pay"><strong>{rupees(order.amount_paise)}</strong> · pay at the counter</p>}
         {order.status === "submitted" && order.approval_expires_at && order.jobs.some((j) => j.status === "awaiting_approval") && <p className="meta">The shop has until {new Date(order.approval_expires_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} to approve this.</p>}
         {live && <p className="meta live"><i className="dot" />This page updates by itself. You can keep it open.</p>}
         {order.can_cancel && <button className="link danger" onClick={cancel} disabled={cancelling}>{cancelling ? "Cancelling…" : "Cancel this print"}</button>}

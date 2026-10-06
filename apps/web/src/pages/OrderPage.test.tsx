@@ -148,4 +148,24 @@ describe("order status page", () => {
     expect(screen.getByText(/can only be opened in the browser where it was started/)).toBeTruthy();
     expect(getOrder).not.toHaveBeenCalled();
   });
+
+  it("asks for money and for the code only while there is something to collect", async () => {
+    const asks = () => [screen.queryByText(/pay at the counter/) !== null, screen.queryByText("Say this code at the counter") !== null];
+    getOrder.mockResolvedValue(view("submitted", "awaiting_approval"));
+    open();
+    await tick(0);
+    expect(asks()).toEqual([true, true]);
+    cleanup();
+    for (const [order, job] of [["cancelled", "cancelled"], ["expired", "expired"], ["closed", "rejected"]] as const) {
+      getOrder.mockResolvedValue(view(order, job));
+      open();
+      await tick(0);
+      expect(asks()).toEqual([false, false]);
+      cleanup();
+    }
+    getOrder.mockResolvedValue(view("closed", "failed"));          // "ask at the counter": the code still helps, the price does not
+    open();
+    await tick(0);
+    expect(asks()).toEqual([false, true]);
+  });
 });

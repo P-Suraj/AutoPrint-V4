@@ -28,14 +28,13 @@ public sealed class SumatraEngine(string exePath) : IPrintEngine
     public const string NotReadyReason = "sumatra_missing_or_not_the_portable_build";
     public string? NotReady() => IsGenuinePortable(exePath) ? null : NotReadyReason;
 
-    public static string SettingsFor(Shop.PrintOptions o)
+    /// <summary>The -print-settings value, or null when the page range is not a well-formed range. A range is never
+    /// "cleaned up": SumatraPDF ignores a range it cannot read and prints every page, so a doubtful one prints nothing.</summary>
+    public static string? SettingsFor(Shop.PrintOptions o)
     {
+        if (!PageRange.TryNormalize(o.PageRange, out var range) || o.Copies < 1) return null;
         var parts = new List<string> { $"{o.Copies}x", o.Color ? "color" : "monochrome", o.Duplex ? "duplexlong" : "simplex", "fit", "paper=a4" };
-        if (!string.IsNullOrWhiteSpace(o.PageRange))
-        {
-            var cleaned = new string(o.PageRange.Where(c => char.IsDigit(c) || c is ',' or '-').ToArray());   // digits, commas, hyphens only
-            if (cleaned.Length > 0) parts.Add(cleaned);
-        }
+        if (range is not null) parts.Add(range);
         return string.Join(",", parts);
     }
 
@@ -45,9 +44,10 @@ public sealed class SumatraEngine(string exePath) : IPrintEngine
         if (!File.Exists(r.FilePath)) return new(false, "file_missing");
         // SumatraPDF does not fail on a printer name that does not exist: it hangs. Never start it for one.
         if (!new WinSpoolObserver().PrinterExists(r.Printer)) return new(false, "printer_not_found");
+        if (SettingsFor(r.Options) is not { } settings) return new(false, PageRange.InvalidReason);       // the print program is not started
 
         var psi = new ProcessStartInfo(exePath) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true, RedirectStandardOutput = true };
-        foreach (var a in new[] { "-print-to", r.Printer, "-print-settings", SettingsFor(r.Options), r.FilePath }) psi.ArgumentList.Add(a);
+        foreach (var a in new[] { "-print-to", r.Printer, "-print-settings", settings, r.FilePath }) psi.ArgumentList.Add(a);
 
         using var p = Process.Start(psi)!;
         var stderr = new StringBuilder();

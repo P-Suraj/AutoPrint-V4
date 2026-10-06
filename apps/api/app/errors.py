@@ -69,6 +69,7 @@ CATALOG: dict[str, ApiError] = {e.code: e for e in [
 SQL_SUCCESS = {"ok", "claimed", "no_job"}
 SQL_RESULT_MAP: dict[str, str] = {
     "shop_not_found": "shop_not_found",
+    "shop_not_accepting": "shop_not_accepting",      # the shop's queue of jobs waiting for approval is full
     "order_not_found": "order_not_found",
     "order_not_draft": "order_not_draft",
     "order_expired": "order_expired",

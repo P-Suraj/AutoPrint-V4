@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
@@ -35,6 +36,68 @@ internal static class Ui
 
     // Segoe MDL2 Assets, present on every Windows 10 and 11
     public const string Printer = "", Warning = "", Info = "", Search = "", Gear = "", Tick = "", Offline = "", Clear = "";
+}
+
+/// <summary>
+/// A row of short facts with a small dot between neighbours ("48 pages · 2 copies · Both sides"). When the row is too
+/// narrow a whole fact moves to the next line, and the dot is drawn only between two facts that share a line, so no
+/// line ever ends or begins with a stray dot.
+/// </summary>
+internal sealed class Facts : Panel
+{
+    private const double Gap = 26, LineGap = 2;
+    private readonly List<Point> _dots = new();
+
+    public static readonly DependencyProperty DotProperty = DependencyProperty.Register(nameof(Dot), typeof(Brush), typeof(Facts),
+        new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
+    public Brush? Dot { get => (Brush?)GetValue(DotProperty); set => SetValue(DotProperty, value); }
+
+    public TextBlock Add(string text, string style = "Body", string? colour = null)
+    {
+        var t = Ui.T(text, style, colour); t.TextWrapping = TextWrapping.NoWrap; t.TextTrimming = TextTrimming.CharacterEllipsis;
+        Children.Add(t);
+        return t;
+    }
+
+    private Size Layout(double width, bool arrange)
+    {
+        double x = 0, y = 0, line = 0, widest = 0;
+        if (arrange) _dots.Clear();
+        foreach (UIElement c in InternalChildren)
+        {
+            if (c.Visibility == Visibility.Collapsed) continue;
+            var want = c.DesiredSize;
+            if (x > 0 && x + Gap + want.Width > width) { y += line + LineGap; x = 0; line = 0; }
+            if (x > 0)
+            {
+                if (arrange) _dots.Add(new Point(x + Gap / 2, y + want.Height / 2 + 1));
+                x += Gap;
+            }
+            if (arrange) c.Arrange(new Rect(x, y, Math.Min(want.Width, Math.Max(0, width - x)), want.Height));
+            x += Math.Min(want.Width, width);
+            line = Math.Max(line, want.Height); widest = Math.Max(widest, x);
+        }
+        return new Size(widest, y + line);
+    }
+
+    protected override Size MeasureOverride(Size available)
+    {
+        foreach (UIElement c in InternalChildren) c.Measure(new Size(available.Width, double.PositiveInfinity));
+        return Layout(available.Width, arrange: false);
+    }
+
+    protected override Size ArrangeOverride(Size final)
+    {
+        Layout(final.Width, arrange: true);
+        InvalidateVisual();
+        return final;
+    }
+
+    protected override void OnRender(DrawingContext dc)
+    {
+        var brush = Dot ?? Ui.Brush("Muted");
+        foreach (var p in _dots) dc.DrawEllipse(brush, null, p, 1.5, 1.5);
+    }
 }
 
 /// <summary>
@@ -105,11 +168,21 @@ internal static class Motion
 /// <summary>How the shop PC gets a busy shopkeeper's attention: a short soft chime and the taskbar button flashing.</summary>
 internal static class Alerts
 {
+    /// <summary>Self-test only. When set, a chime or a flash is reported here ("chime", "flash", "flash-off") and not
+    /// performed, so a test can count them without making a noise or lighting up the taskbar.</summary>
+    internal static Action<string>? Probe;
+
     private static System.Media.SoundPlayer? _player;
     private static readonly object Gate = new();
 
     /// <summary>Two soft notes, made in memory once (no sound file to ship or lose). Played off the window's thread.</summary>
-    public static void Chime() => Task.Run(() =>
+    public static void Chime()
+    {
+        if (Probe is { } probe) { probe("chime"); return; }
+        Task.Run(Play);
+    }
+
+    private static void Play()
     {
         try
         {
@@ -120,7 +193,7 @@ internal static class Alerts
             }
         }
         catch (Exception e) { App.Log("sound: " + e.GetType().Name); }       // no sound card, or audio service stopped: the flash and the notification still happen
-    });
+    }
 
     private static MemoryStream Wave()
     {
@@ -154,6 +227,7 @@ internal static class Alerts
     /// <summary>Flashes the taskbar button until the window is brought to the front. Does nothing if it is already in front.</summary>
     public static void Flash(Window w, bool on = true)
     {
+        if (Probe is { } probe) { probe(on ? "flash" : "flash-off"); return; }
         var h = new WindowInteropHelper(w).Handle;
         if (h == IntPtr.Zero) return;
         var info = new FLASHWINFO { cbSize = (uint)Marshal.SizeOf<FLASHWINFO>(), hwnd = h, dwFlags = on ? 3u | 12u : 0u, uCount = on ? uint.MaxValue : 0 };   // FLASHW_ALL | FLASHW_TIMERNOFG
