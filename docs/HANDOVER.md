@@ -92,3 +92,11 @@ Better state than the note above assumed. Release build 0 warnings; `dotnet test
 - Changed, untested: "Test the colour printer" button (never clicked); second render set of 75 PNGs not looked at (about half of the first set was, only two at 150%); taskbar flash on the real `IsActive` path; requests already waiting at start-up now make no sound, a reminder follows after 2 minutes (behaviour change to confirm with the founder).
 - Not done: soak CPU and memory numbers; docs. Unverified without a real printer: the Save As prompt itself, removing a job stuck at a switched-off printer, paper output.
 - To release: re-run the tests, then `apps\desktop\installer\build.ps1 -Version 4.0.2` (bump the version first).
+
+### Load test on the wip branch: its agent's final report (6 Oct, local only)
+`apps\api\.venv\Scripts\python.exe e2e\load_test.py [all|pilot|stress|limits]` (`all` takes about 12 minutes). Run against the working tree while other agents were editing `apps/api`, so line numbers are approximate.
+- Pilot scale (5 shops, 50 customers in 60 s): 1,205 requests, 0 failures, 0 stuck orders; every route p90 at or below 45 ms; status poll 13 ms, shop poll 17 ms.
+- Stress (10 shops, 300 customers in 60 s): 6,425 requests, 0 failures, 0 stuck orders; in-app p90 9 to 61 ms per route; API used 42% of one core.
+- Rate limits: 8 of 8 checks passed (60 accepted then 429 per address; pairing 12; shop 300; others unaffected; recovered at the next window).
+- **The wait people feel is polling, not the backend:** submit to the shop seeing the job p50 3.5 s, p90 9.0 s (10 s shop poll, `AgentService.cs` about line 41); the customer page showed the result at p50 8 s, p90 12 s (4 s status poll, `OrderPage.tsx:13`). Shortening these is the cheapest "no lag" win.
+- Not measured, likely to matter live: quote makes 5 database round trips; new order, upload intent and submit 3 each (`apps/api/app/main.py`); finalize downloads the whole file into the function (`storage.py:126-140`), so a 25 MiB file will be far slower live than the 58 to 99 ms seen locally.
