@@ -98,7 +98,7 @@ def main():
             shop_out, _ = shop_side.communicate(timeout=200)
         except subprocess.TimeoutExpired:
             shop_side.kill(); shop_out = "(timed out)"
-        httpx.post(BASE + "/v1/internal/shop-login", headers=admin, json={"revoke_label": "e2e-run"}, timeout=60)
+        httpx.post(BASE + "/v1/internal/shop-login", headers=admin, json={"shop_code": SHOP, "revoke_label": "e2e-run"}, timeout=60)
 
     after = stamp()
     pages = None

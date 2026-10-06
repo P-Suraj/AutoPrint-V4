@@ -58,23 +58,34 @@ public sealed class PrintOrchestrator(
             // ---- the irreversible step: record intent FIRST, then print ----------------------------------------
             journal.Advance(claim.AttemptId, AttemptState.Intent);
             Emit(Stage.Printing, claim.JobId);
-            SubmitResult submit;
-            try { submit = await engine.SubmitAsync(new PrintRequest(file, printer, claim.Options, claim.SpoolerJobName, expected), ct); }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception e) { submit = new SubmitResult(false, e.GetType().Name); }
-
-            if (submit.Accepted)
-            {
-                journal.Advance(claim.AttemptId, AttemptState.Sent);
-                await TellServerSentAsync(claim, ct);
-            }
 
             // ---- watch the spooler, keeping the lease alive ----------------------------------------------------
-            Emit(Stage.Watching, claim.JobId);
+            // The watch starts together with the print process, not after it: a long job would otherwise outlive its
+            // lease before the first renewal, and a short one could leave the queue before anyone looked.
             var wait = (options.WaitLimit ?? WaitLimit.For)(expected);
             var renewEvery = options.LeaseRenewEvery ?? TimeSpan.FromSeconds(60);
-            var evidence = await SpoolWatcher.WatchAsync(observer, printer, claim.SpoolerJobName, expected, wait,
-                async t => await RenewQuietlyAsync(claim, t), renewEvery, ct, options.SpoolPoll);
+            using var watchCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var submitting = SubmitQuietlyAsync(new PrintRequest(file, printer, claim.Options, claim.SpoolerJobName, expected), ct);
+            var watching = SpoolWatcher.WatchAsync(observer, printer, claim.SpoolerJobName, expected, wait,
+                async t => await RenewQuietlyAsync(claim, t), renewEvery, watchCts.Token, options.SpoolPoll, waitStartsAfter: submitting);
+            SubmitResult submit;
+            SpoolEvidence evidence;
+            try
+            {
+                submit = await submitting;
+                if (submit.Accepted)
+                {
+                    journal.Advance(claim.AttemptId, AttemptState.Sent);
+                    await TellServerSentAsync(claim, ct);
+                }
+                Emit(Stage.Watching, claim.JobId);
+                evidence = await watching;
+            }
+            finally
+            {
+                watchCts.Cancel();                                                   // never leave the watch running behind us
+                try { await watching; } catch (Exception) { /* already finished, or stopped by the line above */ }
+            }
 
             var decision = OutcomeRules.Decide(submit, evidence);
             return await ReportAsync(claim, decision.Outcome, decision.Reason, evidence, ct);
@@ -84,6 +95,13 @@ public sealed class PrintOrchestrator(
             try { if (File.Exists(file)) File.Delete(file); } catch (IOException) { /* best effort; nothing sensitive is kept longer than needed */ }
             Emit(Stage.Idle);
         }
+    }
+
+    private async Task<SubmitResult> SubmitQuietlyAsync(PrintRequest request, CancellationToken ct)
+    {
+        try { return await engine.SubmitAsync(request, ct); }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception e) { return new SubmitResult(false, e.GetType().Name); }
     }
 
     private async Task TellServerSentAsync(Claim claim, CancellationToken ct)
@@ -134,30 +152,43 @@ public sealed class PrintOrchestrator(
             }
             catch (ServerUnreachableException) { await Task.Delay(Delay(i), ct); }
         }
-        Log($"job {Short(claim.JobId)}: outcome not delivered; will be settled at the next start");
+        _undelivered[claim.AttemptId] = (outcome, wire);
+        Log($"job {Short(claim.JobId)}: outcome not delivered; will be settled when the server is reachable");
         return new(RunKind.Uncertain, claim.JobId, "report_undelivered");
     }
 
+    /// <summary>Outcomes this run decided but could not deliver. Kept only in memory: after a restart the journal
+    /// alone decides, and that is always uncertain or failed.</summary>
+    private readonly Dictionary<Guid, (Outcome Outcome, IDictionary<string, object?> Wire)> _undelivered = [];
+
     /// <summary>
-    /// Call at start-up. Settles every attempt whose outcome never reached the server: if the print might have
-    /// started it is "uncertain"; if nothing was ever sent it is "failed". Never reprints.
+    /// Call at start-up and before each poll. Settles every attempt whose outcome never reached the server. An
+    /// outcome decided in this run is sent as it was, with its evidence. After a restart only the journal is left:
+    /// if the print might have started it is "uncertain"; if nothing was ever sent it is "failed". Never reprints.
     /// </summary>
     public async Task<int> RecoverAsync(CancellationToken ct)
     {
         int settled = 0;
         foreach (var e in journal.Unreported())
         {
-            var maybeSent = e.State >= AttemptState.Intent;
-            var outcome = maybeSent ? Outcome.Uncertain : Outcome.Failed;
-            var reason = maybeSent ? "agent_restarted_after_print_intent" : "agent_restarted_before_print";
+            Outcome outcome;
+            IDictionary<string, object?> wire;
+            if (_undelivered.TryGetValue(e.AttemptId, out var kept)) (outcome, wire) = kept;
+            else
+            {
+                var maybeSent = e.State >= AttemptState.Intent;
+                outcome = maybeSent ? Outcome.Uncertain : Outcome.Failed;
+                var reason = maybeSent ? "agent_restarted_after_print_intent" : "agent_restarted_before_print";
+                wire = new Dictionary<string, object?> { ["reason"] = reason, ["journal_state"] = e.State.ToString() };
+            }
             try
             {
-                await api.ReportOutcomeAsync(e.AttemptId, e.AttemptToken, outcome,
-                    new Dictionary<string, object?> { ["reason"] = reason, ["journal_state"] = e.State.ToString() }, ct);
+                await api.ReportOutcomeAsync(e.AttemptId, e.AttemptToken, outcome, wire, ct);
                 journal.MarkReported(e.AttemptId, outcome.ToString());
+                _undelivered.Remove(e.AttemptId);
                 settled++;
             }
-            catch (ApiRejectedException) { journal.MarkReported(e.AttemptId, "Stale"); settled++; }   // the server already decided
+            catch (ApiRejectedException) { journal.MarkReported(e.AttemptId, "Stale"); _undelivered.Remove(e.AttemptId); settled++; }   // the server already decided
             catch (ServerUnreachableException) { /* still offline: try again next time */ }
         }
         return settled;

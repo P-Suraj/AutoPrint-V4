@@ -414,7 +414,8 @@ export interface paths {
         /**
          * Shop Email Start
          * @description Emails a sign-in link, but only to an address the founder registered. The answer is the same either way, so
-         *     nobody can use this to find out which addresses are registered.
+         *     nobody can use this to find out which addresses are registered. That includes a provider failure: only a
+         *     registered address can cause one, so it is logged and never shown to the caller.
          */
         post: operations["shopEmailStart"];
         delete?: never;

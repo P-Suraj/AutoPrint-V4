@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.email_auth import EmailAuthError
 from app.main import create_app
+from dbtools import sha
 
 ADMIN = {"X-Maintenance-Token": "m" * 40}
 
@@ -59,9 +60,32 @@ def test_email_sign_in_gives_a_shop_key_only_for_registered_addresses(settings, 
         assert c.get("/v1/shop/me", headers=H(key)).json()["shop_code"] == shop.code
         # an email address can never be used as a key
         assert c.get("/v1/shop/me", headers=H("owner@example.com")).status_code == 401
-        # removing the address stops new sign-ins
+        # removing the address stops new sign-ins AND the key it was already given
         assert c.post("/v1/internal/shop-email", headers=ADMIN, json={"email": "owner@example.com", "remove": True}).status_code == 200
         assert c.post("/v1/shop/email/finish", json={"access_token": "good" * 8}).status_code == 401
+        assert c.get("/v1/shop/me", headers=H(key)).status_code == 401
+
+
+def test_an_email_key_expires_after_30_days_and_does_not_follow_the_address_to_another_shop(settings, shop, raw_db):
+    fake = FakeEmailAuth()
+    fake.tokens["tok1" * 8] = "mover@example.com"
+    other = type(shop)(raw_db)
+    with app_with(settings, fake, ip="203.0.113.4") as c:
+        c.post("/v1/internal/shop-email", headers=ADMIN, json={"shop_code": shop.code, "email": "mover@example.com"})
+        first = c.post("/v1/shop/email/finish", json={"access_token": "tok1" * 8}).json()["key"]
+        second = c.post("/v1/shop/email/finish", json={"access_token": "tok1" * 8}).json()["key"]
+        # 30 days on, the old key is dead although nobody signed in again; a private-link key of the same age still works
+        raw_db.run("UPDATE ap.shop_logins SET created_at = now() - interval '31 days' WHERE credential_hash = %s",
+                   (sha(first),))
+        link = c.post("/v1/internal/shop-login", headers=ADMIN, json={"shop_code": shop.code, "label": "old-link"}).json()["key"]
+        raw_db.run("UPDATE ap.shop_logins SET created_at = now() - interval '31 days' WHERE label = 'old-link'")
+        assert c.get("/v1/shop/me", headers=H(first)).status_code == 401
+        assert c.get("/v1/shop/me", headers=H(second)).status_code == 200
+        assert c.get("/v1/shop/me", headers=H(link)).status_code == 200
+        # the founder moves the address to another shop: its key for the old shop stops working
+        assert c.post("/v1/internal/shop-email", headers=ADMIN, json={"shop_code": other.code, "email": "mover@example.com"}).status_code == 200
+        assert c.get("/v1/shop/me", headers=H(second)).status_code == 401
+        assert c.post("/v1/shop/email/finish", json={"access_token": "tok1" * 8}).json()["shop_code"] == other.code
 
 
 def test_email_sign_in_limits_and_provider_failure(settings, shop):
@@ -69,15 +93,17 @@ def test_email_sign_in_limits_and_provider_failure(settings, shop):
     with app_with(settings, fake, ip="203.0.113.2") as c:
         c.post("/v1/internal/shop-email", headers=ADMIN, json={"shop_code": shop.code, "email": "a@example.com"})
         fake.fail = True
-        assert c.post("/v1/shop/email/start", json={"email": "a@example.com"}).status_code == 503   # provider down: an honest error
+        # provider down: the answer must not differ from an unregistered address, or it would reveal who is registered
+        down = c.post("/v1/shop/email/start", json={"email": "a@example.com"})
+        assert down.status_code == 202 and down.json() == {"status": "sent_if_registered"}
         fake.fail = False
         codes = [c.post("/v1/shop/email/start", json={"email": "a@example.com"}).status_code for _ in range(4)]
         assert 429 in codes and codes[0] == 202                                                      # 3 per address per hour
         assert c.post("/v1/shop/email/start", json={"email": "not-an-email"}).status_code == 422
 
 
-def test_without_a_provider_sign_in_by_email_says_try_again(settings, shop):
+def test_without_a_provider_sign_in_by_email_gives_nothing_away(settings, shop):
     with app_with(settings, ip="203.0.113.3") as c:
         c.post("/v1/internal/shop-email", headers=ADMIN, json={"shop_code": shop.code, "email": "b@example.com"})
-        assert c.post("/v1/shop/email/start", json={"email": "b@example.com"}).status_code == 503
+        assert c.post("/v1/shop/email/start", json={"email": "b@example.com"}).status_code == 202
         assert c.post("/v1/shop/email/finish", json={"access_token": "z" * 40}).status_code == 401

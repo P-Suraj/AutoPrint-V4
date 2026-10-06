@@ -2,8 +2,8 @@
 
 > Resuming? Start with `docs/HANDOVER.md` (current state, what is unverified, next steps, how to work on it).
 
-**Last updated:** 5 October 2026
-**Current phase:** 5 (Windows desktop app) built and launching; the customer site and shop API are live on Vercel and Supabase. Nothing has printed on a physical printer.
+**Last updated:** 6 October 2026
+**Current phase:** 5 (Windows desktop app) built, installer made, whole chain passed on the live site with a virtual printer; Phase 7 pieces partly built. Nothing has printed on a physical printer.
 
 ## Phase gates
 
@@ -138,14 +138,46 @@ Migration 0008 and `limit()` in the API: 60 new orders per 10 minutes per addres
 
 - **Wording:** completed now reads "Sent to printer. Collect it at the counter." (still never "Printed"; the founder says a physical printer works, but the certification drills have not been run, so the rule stands).
 - **Rate limits** extended to uploads (150 per 10 min per address) and quotes (300). New founder check `GET /v1/internal/whoami` shows which address headers the host passes, to confirm the limiter sees real customer addresses. Run once live: the host passes `x-forwarded-for`, `x-real-ip` and `x-vercel-forwarded-for` (values not compared with the real address, so per-address behaviour under real traffic is still unproven).
-- **Email sign-in for shopkeepers** (migration 0009, `app/email_auth.py`, `/v1/shop/email/start` and `/finish`, dashboard sign-in screen, `ap_remote.py add-email`). Built and tested with a fake provider (registered address gets a key, unknown or unregistered gets nothing, an email can never be used as a key, limits, provider failure). **Not verified against real Supabase Auth, and not usable yet.** To switch it on the founder must: (1) in Supabase, Authentication, URL Configuration, set Site URL to `https://autoprint-v4.vercel.app` and add `https://autoprint-v4.vercel.app/shop` to the redirect URLs; (2) add the project publishable key to Vercel as `AUTOPRINT_V4_SUPABASE_PUBLISHABLE_KEY` and redeploy; (3) register an address with `ap_remote.py add-email`; (4) try it. The default Supabase mail sender is rate limited to a few emails per hour; fine for a pilot, replace with a real mail service later. Phone sign-in is not built (SMS costs money).
+- **Email sign-in for shopkeepers** (migration 0009, `app/email_auth.py`, `/v1/shop/email/start` and `/finish`, dashboard sign-in screen, `ap_remote.py add-email`). Built and tested with a fake provider (registered address gets a key, unknown or unregistered gets nothing, an email can never be used as a key, limits, provider failure). **Not verified against real Supabase Auth, and not usable yet.** To switch it on the founder must: (1) in Supabase, Authentication, URL Configuration, set Site URL to `https://autoprint-v4.vercel.app` and add `https://autoprint-v4.vercel.app/shop` to the redirect URLs; (1b) in Supabase, Authentication, Sign In / Providers, Email: keep **Confirm email ON**, and unless something else needs it turn password sign-in off. The API trusts the provider's "this address is confirmed" flag; with confirmation off, anyone could create a confirmed account for a shopkeeper's address with a password and receive that shop's key; (2) add the project publishable key to Vercel as `AUTOPRINT_V4_SUPABASE_PUBLISHABLE_KEY` and redeploy; (3) register an address with `ap_remote.py add-email`; (4) try it. The default Supabase mail sender is rate limited to a few emails per hour; fine for a pilot, replace with a real mail service later. Phone sign-in is not built (SMS costs money).
 - **npm audit** now works with `--registry=https://registry.npmjs.org`. Production dependencies: **0 vulnerabilities** after upgrading `react-router-dom` to 7.18.4 (type check, 39 unit tests, build and the 6 browser end-to-end tests all pass). Dev tools still have known issues (vite, vitest, esbuild, tinypool; 2 critical, 1 high, only reachable while running the dev server or tests on the founder PC). Fix later by upgrading vite 8 and vitest 5, which are breaking changes.
 - 218 Python tests pass.
 - **Not done:** cold-start latency measurement, cleaning the test printer and data, an operator web page, payments (blocked by decision O-2), phone sign-in, second-stage validation.
 
-## Customer connection (discussed, not built)
+## Review fixes (6 Oct 2026)
 
-Today a customer reaches a shop by scanning the counter QR or opening `/s/<SHOP CODE>`; no account. Decided on 5 Oct 2026, to build later: a home-page box where the customer types the short shop code (keep `ABC123`), typo correction by position (letter where digit belongs), case and dash insensitive, show shop name before upload, remember the last shop, optional add-to-home-screen, a printable counter poster. Open risk: no verified per-address rate limit on customer requests.
+A code review of everything so far found the items below. All are fixed and tested locally. **None is deployed:** not pushed, migration 0010 not applied live, no new installer built, the live end-to-end run not repeated.
+
+Desktop app:
+- **The spooler watch now starts together with the print process**, not after it. Before, the lease (300 s) was not renewed while SumatraPDF was running, so a job that took longer would have been refused as stale and shown as "needs attention" although it printed; and a short job could have left the queue before the watch began. Test: a slow engine whose job leaves the queue first still ends "completed", with renewals before the engine returns. How long SumatraPDF really runs on a large job is still unmeasured; check a 150+ side job at physical certification.
+- **A failed queue read is no longer taken as an empty queue** (`WinSpoolObserver.ListJobs` checks the result of `EnumJobs`). An empty queue is what the watcher reads as "the job left". Checked against the real spooler on the virtual printer (both real-spooler tests pass); the failure path itself cannot be provoked on this PC.
+- **Undelivered outcomes are settled as soon as the server answers again**, not only at the next app start, and an outcome decided in the same run is sent as it was, with its evidence (before: always "uncertain"). After a restart the journal rule is unchanged: uncertain or failed, never a reprint.
+
+API and database:
+- **Migration 0010:** an email sign-in key stops working 30 days after it was made (before: only when someone signed in again later); removing a registered address, or moving it to another shop, revokes the keys it was given. Private-link keys are unchanged. Email keys made before 0010 are revoked by it (none exist live; the feature is not switched on).
+- **`/v1/shop/email/start` gives the same answer when the mail provider fails** (before: an error only for registered addresses, which revealed them). The failure is logged. Not changed: anyone can use up the 3-per-hour cap of a known address and so delay that shopkeeper's email sign-in; the cap protects the provider's small mail quota, and the private link still works.
+- **Revoking shop logins is per shop:** `ap_remote.py revoke-link ABC123 --label owner` (the API refuses a revoke without a shop code). Before, the label alone was matched across all shops.
+- **Purge deletes only the files of the order asked for** (before, it ran the general cleanup, so its count could include other orders).
+
+Web:
+- **Content-Security-Policy header** in `vercel.json` (scripts, workers and styles from the site only; connections to the site and `https://*.supabase.co` for uploads). Checked: the production build served locally with the same headers passes the 6 browser tests plus a run over the shop, order, poster and dashboard pages with zero policy violations. **Not checked:** the live site, where the upload goes to Supabase Storage rather than the local test storage. Send one PDF on the live site after deploying.
+- **Trying an upload again reuses the same draft order** instead of creating a new one each time (each new order counted against the 60-per-address limit).
+
+Counts after these changes: 219 Python tests, 58 desktop tests plus 2 real-spooler tests on the virtual printer, 39 web unit tests, 6 browser tests.
+
+## Interface redesign (6 Oct 2026)
+
+The customer pages and the shopkeeper web dashboard were redesigned (`apps/web/src/styles.css`, `ui.tsx`, the pages). No API change; wording that comes from the server is unchanged and the pages still never say "Printed".
+
+- **Home:** the shop code is checked while it is typed and the shop's name appears before the customer goes on; shops used before are one tap.
+- **Send a file:** three visible steps (File, Settings, Send); a large file target (drag and drop works on a computer); a real upload progress bar; touch-sized choices that each show what the whole job would cost; the price pinned to the bottom of the screen.
+- **Order status:** the order code large ("Say this code at the counter"), a four-step track, an animated state for waiting and for the printer, a green finish; the tab title changes and the phone buzzes once when everything is ready to collect.
+- **Shop dashboard:** one line that says whether the shop can receive prints (from when its computer was last seen), refreshed every 10 seconds; the pairing code is looked up by itself at the eighth character; copy, share and print for the customer link; a clear "sign in again" screen when a key has expired. A private link opened in a tab that already shows the page now signs in (before, only a fresh load did).
+
+Checked: type check, build, 39 unit tests, the 6 browser tests, and a scripted walk through every screen above on the production build under the Content-Security-Policy with screenshots reviewed (phone size, and the dashboard at desktop width). **Not checked:** a real phone, Safari, the live site, the email sign-in screens beyond the first one, a screen reader. The upload now uses XMLHttpRequest (needed for the progress bar); against Supabase Storage on the live site this is untested, so the one-PDF check after deploying matters more.
+
+## Customer connection (built)
+
+A customer reaches a shop by scanning the counter QR, opening `/s/<SHOP CODE>`, or typing the short code on the home page (typo-tolerant, remembers the last shops); no account. The site can be added to the home screen and each shop has a printable counter poster. Per-address rate limits exist; see "Rate limits" for what is unverified.
 
 ## Findings so far
 
@@ -157,7 +189,7 @@ Today a customer reaches a shop by scanning the counter QR or opening `/s/<SHOP 
 
 ## Not verified
 
-Physical printing in any form. Duplex and colour. Real-phone behaviour. Cold-start latency. Defender and SmartScreen behaviour of the app. The whole chain (customer upload to Windows app to printer) in one run. 7 npm advisories were not checked (audit endpoint unavailable). Vercel Hobby terms for commercial use. The scheduled maintenance job (GitHub Actions) is not set up.
+Physical printing in any form. Duplex and colour. Real-phone behaviour. Cold-start latency. SmartScreen and other antivirus behaviour of the app (a Defender scan of the installer found nothing). The whole chain on a physical printer (it passed on the virtual one). Vercel Hobby terms for commercial use. The scheduled maintenance job: the workflow exists but does nothing until the repository secret is added. Email sign-in against real Supabase Auth. The review fixes of 6 Oct on the live site.
 
 ## Blocked on founder
 

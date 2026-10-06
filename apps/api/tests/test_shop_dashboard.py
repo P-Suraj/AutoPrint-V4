@@ -112,8 +112,14 @@ def _founder_endpoint_checks(client, shop):
     key = r.json()["key"]
     assert client.get("/v1/shop/me", headers=H(key)).json()["shop_code"] == shop.code
     assert client.post("/v1/internal/shop-login", headers=token, json={"shop_code": "NOP000"}).status_code == 404
-    assert client.post("/v1/internal/shop-login", headers=token, json={"revoke_label": "e2e"}).json() == {"revoked": 1}
+    # revoking is per shop: the same label at another shop is untouched, and a shop code is required
+    other = type(shop)(shop.db)
+    other_key = client.post("/v1/internal/shop-login", headers=token, json={"shop_code": other.code, "label": "e2e"}).json()["key"]
+    assert client.post("/v1/internal/shop-login", headers=token, json={"revoke_label": "e2e"}).status_code == 404
+    assert client.get("/v1/shop/me", headers=H(key)).status_code == 200
+    assert client.post("/v1/internal/shop-login", headers=token, json={"shop_code": shop.code, "revoke_label": "e2e"}).json() == {"revoked": 1}
     assert client.get("/v1/shop/me", headers=H(key)).status_code == 401
+    assert client.get("/v1/shop/me", headers=H(other_key)).json()["shop_code"] == other.code
 
 
 def test_founder_report_shows_counts_devices_and_no_document_names(settings, shop, flow, client, api_db_url):
@@ -165,6 +171,9 @@ def test_purge_deletes_the_files_of_a_finished_order_but_not_of_a_live_one(setti
     tok = {"X-Maintenance-Token": "m" * 40}
     parts = flow.full(pdfs.blank(2))
     short = flow.view().json()["short_code"]
+    # another order whose file is already due for the normal cleanup: a purge must leave it alone
+    bystander = shop.submitted_order()
+    raw_db.run("UPDATE ap.documents SET delete_after = now() - interval '1 minute' WHERE id = %s", (bystander["doc_ids"][0],))
     with TestClient(create_app(dataclasses.replace(settings, maintenance_token="m" * 40))) as c:
         assert c.post("/v1/internal/purge", json={"shop_code": shop.code, "order": short}).status_code == 401
         live = c.post("/v1/internal/purge", headers=tok, json={"shop_code": shop.code, "order": short})
@@ -173,8 +182,10 @@ def test_purge_deletes_the_files_of_a_finished_order_but_not_of_a_live_one(setti
         assert flow.cancel().status_code == 200                                     # the job is now final
         done = c.post("/v1/internal/purge", headers=tok, json={"shop_code": shop.code, "order": short})
         assert done.status_code == 200, done.text
-        assert done.json()["documents_remaining"] == 0 and done.json()["documents_deleted_now"] >= 1
+        assert done.json()["documents_remaining"] == 0 and done.json()["documents_deleted_now"] == 1
+        assert raw_db.one("SELECT deleted_at FROM ap.documents WHERE id = %s", (bystander["doc_ids"][0],)) is None
         assert c.post("/v1/internal/purge", headers=tok, json={"shop_code": shop.code, "order": "ZZZZ"}).status_code == 404
+    raw_db.run("UPDATE ap.documents SET delete_after = now() + interval '1 hour' WHERE id = %s", (bystander["doc_ids"][0],))
 
 
 def test_rate_limits_stop_a_flood_of_orders_but_not_normal_use(settings, shop):

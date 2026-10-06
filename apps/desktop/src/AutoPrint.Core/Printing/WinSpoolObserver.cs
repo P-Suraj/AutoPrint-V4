@@ -23,8 +23,11 @@ public sealed class WinSpoolObserver : ISpoolerObserver
         if (!Native.OpenPrinter(printer, out var h, IntPtr.Zero)) throw new InvalidOperationException("printer_unavailable");
         try
         {
-            Native.EnumJobs(h, 0, 999, 1, IntPtr.Zero, 0, out uint needed, out _);
-            if (needed == 0) return [];
+            // With no buffer the call succeeds only when the queue is empty. Any failure other than "buffer too small"
+            // is a failed read, never an empty queue: the watcher takes "empty" to mean the job left the queue.
+            if (Native.EnumJobs(h, 0, 999, 1, IntPtr.Zero, 0, out uint needed, out _)) return [];
+            if (Marshal.GetLastWin32Error() != Native.ERROR_INSUFFICIENT_BUFFER || needed == 0)
+                throw new InvalidOperationException("spooler_enum_failed");
             var buf = Marshal.AllocHGlobal((int)needed);
             try
             {
@@ -68,6 +71,7 @@ public sealed class WinSpoolObserver : ISpoolerObserver
     {
         public const uint PRINTER_ACCESS_ADMINISTER = 0x4, PRINTER_ACCESS_USE = 0x8, JOB_CONTROL_DELETE = 5;
         public const uint PRINTER_ENUM_LOCAL = 0x2, PRINTER_ENUM_CONNECTIONS = 0x4;
+        public const int ERROR_INSUFFICIENT_BUFFER = 122;
 
         [StructLayout(LayoutKind.Sequential)] public struct PRINTER_DEFAULTS { public IntPtr pDatatype; public IntPtr pDevMode; public uint DesiredAccess; }
 

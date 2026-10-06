@@ -4,7 +4,7 @@ Reads AUTOPRINT_V4_MAINTENANCE_TOKEN from .env. Nothing here prints a secret exc
   PY scripts/ap_remote.py create-shop ABC123 "Shop name" --rates rates.json   create a shop and publish its prices
   PY scripts/ap_remote.py set-rates ABC123 --rates rates.json                 publish a new price version
   PY scripts/ap_remote.py shop-link ABC123 --label owner                      private dashboard link for the shopkeeper
-  PY scripts/ap_remote.py revoke-link --label owner                           revoke every login with that label
+  PY scripts/ap_remote.py revoke-link ABC123 --label owner                    revoke that shop's logins with that label
   PY scripts/ap_remote.py purge ABC123 K7QD                                   delete the files of one finished order now (customer request)
   PY scripts/ap_remote.py add-email ABC123 owner@example.com --label owner   allow this email to sign in to the shop dashboard
   PY scripts/ap_remote.py remove-email owner@example.com                       stop allowing it
@@ -38,7 +38,7 @@ def main() -> int:
     a = sub.add_parser("purge"); a.add_argument("code"); a.add_argument("order", help="the 4-character order code the customer sees")
     a = sub.add_parser("add-email"); a.add_argument("code"); a.add_argument("email"); a.add_argument("--label", default="owner")
     a = sub.add_parser("remove-email"); a.add_argument("email")
-    a = sub.add_parser("revoke-link"); a.add_argument("--label", required=True)
+    a = sub.add_parser("revoke-link"); a.add_argument("code"); a.add_argument("--label", required=True)
     args = p.parse_args()
 
     if args.cmd in ("create-shop", "set-rates"):
@@ -62,7 +62,7 @@ def main() -> int:
         post("/v1/internal/shop-email", {"email": args.email, "remove": True})
         print("removed")
     elif args.cmd == "revoke-link":
-        print(post("/v1/internal/shop-login", {"revoke_label": args.label}))
+        print(post("/v1/internal/shop-login", {"shop_code": args.code, "revoke_label": args.label}))
     return 0
 
 

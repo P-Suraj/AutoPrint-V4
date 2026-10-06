@@ -1,4 +1,4 @@
-# Handover: where AutoPrint V4 stands (5 October 2026)
+# Handover: where AutoPrint V4 stands (6 October 2026)
 
 Written so work can resume in a new session with no memory of this one. Read this first, then `docs/IMPLEMENTATION_STATUS.md` (detail and evidence), `docs/DECISIONS.md` (what is frozen), `docs/RUNBOOK.md` (operating a shop).
 
@@ -7,14 +7,14 @@ A customer sends a PDF from a phone (no account); the shopkeeper approves it in 
 
 | Thing | Where |
 |---|---|
-| Code | `F:\Projects\AutoPrint-V4`, GitHub `P-Suraj/AutoPrint-V4`, branch `main` (last commit `735c6ac` at writing) |
+| Code | `F:\Projects\AutoPrint-V4`, GitHub `P-Suraj/AutoPrint-V4`, branch `main` (see `git log` for the latest commit) |
 | Live site | https://autoprint-v4.vercel.app (Vercel project `autoprint-v4`, region Mumbai; pushes to `main` deploy automatically) |
 | Database and file storage | Supabase project `qgiutwhmqidnkcwbeuls` (Mumbai), schema `ap` |
 | Test shop | `TST001` ("AutoPrint Test Shop"): customer page `/s/TST001`; shopkeeper link is in `dist\SHOP_LINK.txt` (git-ignored) |
 | Windows app | `apps/desktop`; installer `dist\AutoPrintSetup-4.0.0.exe` (git-ignored; rebuild with `apps\desktop\installer\build.ps1`) |
 
 ## 2. What is built and working (evidence in IMPLEMENTATION_STATUS.md)
-- **Database** (`supabase/migrations/0001..0007`, all applied live): orders, jobs, print attempts, devices, pairings, shop logins; every business rule is a PostgreSQL function returning `{"result": code}`. Separate state machines for order, payment, job and print attempt. A job is never printed twice automatically; anything uncertain goes to a human (`needs_attention`).
+- **Database** (`supabase/migrations/0001..0010`; 0001 to 0009 applied live, **0010 not yet applied live**): orders, jobs, print attempts, devices, pairings, shop logins, rate limits, shop emails; every business rule is a PostgreSQL function returning `{"result": code}`. Separate state machines for order, payment, job and print attempt. A job is never printed twice automatically; anything uncertain goes to a human (`needs_attention`).
 - **API** (`apps/api`, FastAPI on Vercel): customer routes (order secret header), shop-app routes (device id and secret headers), shopkeeper dashboard routes (`X-Shop-Key`), founder routes (`X-Maintenance-Token`: migrate, maintenance, shop-login, shop provisioning, report).
 - **Customer web** (`apps/web`, React, Vite): scan or open `/s/CODE`, or type the 3-letters-3-digits code on the home page (typo-tolerant; remembers last 5 shops); upload, options, price estimate, submit, live status. Wording says "Sent to printer", never "Printed" (decision O-8).
 - **Shopkeeper dashboard** (`/shop#key=...`): private-link login; type the code shown by the Windows app to connect a computer; list and disconnect computers. The `shop_logins.method` column reserves `phone` and `email` for later sign-in methods.
@@ -24,10 +24,10 @@ A customer sends a PDF from a phone (no account); the shopkeeper approves it in 
 - **CI**: `.github/workflows/maintenance.yml` (every 15 minutes).
 
 ## 3. Test status at the last run
-- Python: 211 passed (`apps\api\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider`; needs the local test PostgreSQL, see section 6).
-- Desktop: 56 passed, 3 skipped (`dotnet test apps/desktop/tests/AutoPrint.Core.Tests`; the skipped ones need `AP_REAL_PRINTER` and `AP_SUMATRA`).
-- Web: 39 unit tests pass (`npx vitest run`); typecheck and build pass. The Playwright end-to-end suite was not re-run after the shop-code box was added.
-- Whole chain on the live site, virtual printer: PASS (`e2e/run_live_e2e.py`): customer sees "printing" about 2.4 s and "completed" about 5.9 s after submit.
+- Python: 219 passed (`apps\api\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider`; needs the local test PostgreSQL, see section 6).
+- Desktop: 58 passed, 3 skipped (`dotnet test apps/desktop/tests/AutoPrint.Core.Tests`; the skipped ones need `AP_REAL_PRINTER` and `AP_SUMATRA`). With those two set to the virtual printer, the 2 real-spooler tests also pass (60 of 60, the live end-to-end test excluded).
+- Web: 39 unit tests pass (`npx vitest run`); typecheck and build pass. The 6 Playwright tests pass against the production build served with the `vercel.json` headers.
+- Whole chain on the live site, virtual printer: PASS on 6 Oct (`e2e/run_live_e2e.py`): customer sees "printing" about 2.4 s and "completed" about 5.9 s after submit. **Not re-run after the review fixes of 6 Oct** (see IMPLEMENTATION_STATUS.md, "Review fixes").
 
 ## 4. What is NOT verified (be honest about this)
 - **Physical printing, in any form.** The Kyocera TASKalfa 3212i is installed but was offline and untouched. The completion rule (v2, migration 0006) was derived on a virtual printer and is **provisional**. Open risk: if a real driver never reports PRINTING, no job would ever auto-complete and decision F-8 needs the founder.
@@ -35,9 +35,11 @@ A customer sends a PDF from a phone (no account); the shopkeeper approves it in 
 - Real phones (only browser emulation was used); the WPF windows driven with a real queued job (the founder started testing this); upgrade over an older install; a clean PC without .NET; the "start at sign-in" option; a reboot; a 24-hour soak.
 - Defender: the installer scan showed no detection; the file is unsigned so SmartScreen will warn. Not tested on other antivirus products.
 - Cold-start latency of the Vercel function; 7 npm advisories (the audit endpoint was unavailable); Vercel Hobby terms for commercial use; retention proven live past a real window.
-- No per-address rate limit on customer requests (nothing prints without shopkeeper approval, and unapproved jobs expire in 1 hour).
+- Per-address rate limits exist (migration 0008) but were not flood-tested live, and the address values the host passes were not compared with a real customer address.
+- The review fixes of 6 Oct are tested locally only: not deployed, migration 0010 not applied live, no new installer built, the new Content-Security-Policy header not seen on the live site (the upload to Supabase Storage under it is untested).
 
 ## 5. Next steps, in suggested order
+0. **Ship the review fixes:** commit and push (deploys the site), apply migration 0010 through `/v1/internal/migrate`, then on the live site send one PDF from `/s/TST001` (proves uploads work under the new Content-Security-Policy) and re-run `e2e/run_live_e2e.py`. Build a new installer (bump the version) so shops get the desktop fixes.
 1. **Founder action:** add GitHub repository secret `AUTOPRINT_MAINTENANCE_TOKEN` (value of `AUTOPRINT_V4_MAINTENANCE_TOKEN` in `.env`) so the cleanup workflow works.
 2. **Founder test** following `docs/TEST_THE_WINDOWS_APP.md`; collect wording, speed and warning-text feedback.
 3. **Physical certification (Phases 1, 6, 8)** when at the shop: 30 to 50 real prints, duplex and colour, every failure drill, record which flags the real driver raises, re-validate or change the completion rule. This gates any "Printed" wording and any payments.
@@ -71,4 +73,4 @@ A customer sends a PDF from a phone (no account); the shopkeeper approves it in 
 - Adoption bar: AutoPrint must be at least 50% more efficient than WhatsApp or email for both student and shopkeeper.
 - Claude Code runs on the founder laptop; if it sleeps, work pauses. Cloud sessions cannot reach the printer or local files.
 
-Migration 0009 is applied live (6 Oct 2026); email sign-in stays inactive until the Supabase settings and the publishable key are added.
+Migration 0009 is applied live (6 Oct 2026); email sign-in stays inactive until the Supabase settings and the publishable key are added. Migration 0010 (email sign-ins expire after 30 days and are revoked with their address) is written and tested locally, not applied live.

@@ -5045,7 +5045,7 @@
     },
     "/v1/shop/email/start": {
       "post": {
-        "description": "Emails a sign-in link, but only to an address the founder registered. The answer is the same either way, so\nnobody can use this to find out which addresses are registered.",
+        "description": "Emails a sign-in link, but only to an address the founder registered. The answer is the same either way, so\nnobody can use this to find out which addresses are registered. That includes a provider failure: only a\nregistered address can cause one, so it is logged and never shown to the caller.",
         "operationId": "shopEmailStart",
         "requestBody": {
           "content": {

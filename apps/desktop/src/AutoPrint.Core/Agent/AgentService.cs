@@ -41,12 +41,13 @@ public sealed class AgentService
     public async Task RunAsync(CancellationToken ct)
     {
         int failures = 0;
-        bool recovered = false;
         while (!ct.IsCancellationRequested)
         {
             try
             {
-                if (!recovered) { await _orchestrator.RecoverAsync(ct); recovered = true; }
+                // every round, not only at start: an outcome that could not be delivered (offline at boot, or the
+                // network dropped during the report) is settled as soon as the server answers again
+                await _orchestrator.RecoverAsync(ct);
                 var snap = await _api.PollAsync(ct);
                 failures = 0;
                 Publish(_state with { Online = true, NeedsPairing = false, Queue = snap, Problem = null, LastPollAt = snap.At });

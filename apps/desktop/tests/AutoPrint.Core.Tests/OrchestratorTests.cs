@@ -151,6 +151,48 @@ public class OrchestratorTests
     }
 
     [Fact]
+    public async Task An_undeliverable_outcome_is_delivered_with_its_evidence_once_the_server_is_back_without_a_restart()
+    {
+        using var rig = new Rig();
+        var claim = rig.Api.NextClaim!;
+        rig.Api.ReportAlwaysUnreachable = true;
+        Assert.Equal("report_undelivered", (await rig.Orchestrator.RunOnceAsync(default)).Reason);
+
+        rig.Api.ReportAlwaysUnreachable = false;                                      // the network comes back; same process
+        Assert.Equal(1, await rig.Orchestrator.RecoverAsync(default));
+        var report = rig.Api.Reports.Single();
+        Assert.Equal(Outcome.Completed, report.Outcome);                              // what was really observed, not a guess
+        Assert.Equal(true, report.Evidence["left_queue"]);
+        Assert.Equal(AttemptState.Reported, rig.Journal.StateOf(claim.AttemptId));
+        Assert.Equal(0, await rig.Orchestrator.RecoverAsync(default));                // and only once
+        Assert.Equal(1, rig.Spooler.SubmitCount);
+    }
+
+    [Fact]
+    public async Task The_lease_is_renewed_and_the_job_is_watched_while_the_print_process_is_still_running()
+    {
+        using var rig = new Rig();
+        var slow = new SlowEngine(rig.Spooler, TimeSpan.FromMilliseconds(400));       // the queue empties long before the engine returns
+        var o = new PrintOrchestrator(rig.Api, slow, rig.Spooler, rig.Journal, rig.Downloader,
+            new OrchestratorOptions(Path.Combine(rig.Dir, "work"), _ => "Test Printer", _ => TimeSpan.FromMilliseconds(300),
+                                    TimeSpan.FromMilliseconds(80), TimeSpan.FromMilliseconds(5)));
+        var res = await o.RunOnceAsync(default);
+        Assert.Equal(RunKind.Completed, res.Kind);                                    // seen although it left before the engine finished
+        Assert.True(rig.Api.RenewCount >= 2, $"renewed {rig.Api.RenewCount} times");
+        Assert.True(rig.Api.Calls.IndexOf("renew") < rig.Api.Calls.IndexOf("sent"));  // renewed before the engine returned
+    }
+
+    private sealed class SlowEngine(IPrintEngine inner, TimeSpan delay) : IPrintEngine
+    {
+        public async Task<SubmitResult> SubmitAsync(PrintRequest r, CancellationToken ct)
+        {
+            var result = await inner.SubmitAsync(r, ct);
+            await Task.Delay(delay, ct);
+            return result;
+        }
+    }
+
+    [Fact]
     public async Task A_stale_attempt_is_accepted_as_the_servers_decision()
     {
         using var rig = new Rig();

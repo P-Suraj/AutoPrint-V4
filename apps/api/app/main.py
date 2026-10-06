@@ -1,7 +1,6 @@
 """AutoPrint V4 API.
 
-Customer-side routes are implemented (Phase 3). Shop-side (desktop app) routes are declared so the
-contract is complete, and answer 501 `not_implemented` until Phase 5.
+Customer routes, shop desktop app routes, shopkeeper dashboard routes and the founder's internal routes.
 
 Rules for every handler: no business logic here (it lives in SQL functions), expected failures
 become the error envelope through the catalog, and nothing secret is ever logged.
@@ -408,7 +407,8 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
     @shop.post("/email/start", response_model=s.EmailStartResponse, status_code=202, operation_id="shopEmailStart")
     def shop_email_start(body: s.EmailStartRequest, request: Request):
         """Emails a sign-in link, but only to an address the founder registered. The answer is the same either way, so
-        nobody can use this to find out which addresses are registered."""
+        nobody can use this to find out which addresses are registered. That includes a provider failure: only a
+        registered address can cause one, so it is logged and never shown to the caller."""
         email = body.email.strip().lower()
         h = sha256_hex(email)
         limit(request, "email-start", 5, 600)
@@ -418,7 +418,6 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
                 email_auth.send_link(email, f"{settings.web_base_url}/shop")
             except EmailAuthError:
                 log.warning("sign-in email could not be sent")
-                raise ApiException("try_again") from None
         return s.EmailStartResponse(status="sent_if_registered")
 
     @shop.post("/email/finish", response_model=s.ShopSignedIn, operation_id="shopEmailFinish")
@@ -581,8 +580,13 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
         live = db.one("SELECT count(*) FROM ap.jobs WHERE order_id = ANY(%s) AND status IN ('awaiting_approval', 'approved', 'printing')", (ids,))[0]
         if live:
             raise ApiException("not_actionable")
-        db.rows("UPDATE ap.documents SET delete_after = now() WHERE order_id = ANY(%s) AND deleted_at IS NULL RETURNING id", (ids,))
-        n = delete_due_documents(db, storage, limit=50)
+        # only this order's files; delete_after is set too, so the normal cleanup finishes the job if a delete fails here
+        due = db.rows("UPDATE ap.documents SET delete_after = now() WHERE order_id = ANY(%s) AND deleted_at IS NULL RETURNING id, object_key", (ids,))
+        n = 0
+        for document_id, key in due:
+            storage.delete(key)
+            db.one("SELECT ap.mark_document_deleted(%s)", (document_id,))
+            n += 1
         remaining = db.one("SELECT count(*) FROM ap.documents WHERE order_id = ANY(%s) AND deleted_at IS NULL", (ids,))[0]
         return {"orders_matched": len(ids), "documents_deleted_now": n, "documents_remaining": remaining}
 
@@ -618,13 +622,17 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
     @app.post("/v1/internal/shop-login", include_in_schema=False)
     def issue_shop_login(body: dict, x_maintenance_token: str = Header("")):
         """Founder tool: creates (method "link") or revokes a shop login without needing the database port. The key is
-        returned once and only its hash is stored. Same token as migrate; never reachable by customers or shops."""
+        returned once and only its hash is stored. Same token as migrate; never reachable by customers or shops.
+        Revoking is by label within ONE shop: labels such as "owner" repeat across shops."""
         require_maintenance_token(x_maintenance_token)
+        shop_code, label = str(body.get("shop_code", "")).strip().upper(), str(body.get("label", "owner"))[:80]
         if body.get("revoke_label"):
-            n = db.one("WITH r AS (UPDATE ap.shop_logins SET revoked_at = now() WHERE label = %s AND revoked_at IS NULL RETURNING 1) SELECT count(*) FROM r",
-                       (str(body["revoke_label"])[:80],))[0]
+            shop_row = db.one("SELECT id FROM ap.shops WHERE code = %s", (shop_code,))
+            if shop_row is None:
+                raise ApiException("shop_not_found")
+            n = db.one("WITH r AS (UPDATE ap.shop_logins SET revoked_at = now() WHERE shop_id = %s AND label = %s AND revoked_at IS NULL RETURNING 1) "
+                       "SELECT count(*) FROM r", (shop_row[0], str(body["revoke_label"])[:80]))[0]
             return {"revoked": n}
-        shop_code, label = str(body.get("shop_code", "")), str(body.get("label", "owner"))[:80]
         key = secrets.token_hex(32)
         res = check(db.call("shop_login_create", shop_code, "link", sha256_hex(key), label))
         return {"login_id": res["login_id"], "key": key}

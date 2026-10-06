@@ -26,11 +26,13 @@ The database port is blocked from the founder PC, so these tools go through the 
 |---|---|---|
 | Report shows computer last seen long ago | PC off, asleep, or no internet | Ask the shopkeeper to wake the PC and check the status dot in the tray app (green online, orange offline). It reconnects by itself |
 | App shows a new pairing code instead of the queue | Credentials were removed or the computer was disconnected on the dashboard | Shopkeeper types the new code on their dashboard |
-| Customer says "not taking orders" | App has been offline for 45+ seconds | As above |
+| Customer sees "The shop's printer computer looks offline" | App has been offline for 45+ seconds (the customer can still send; the job waits) | As above |
+| Customer sees "This shop is not taking orders right now" | The shop is switched off in the database (`is_active` false) | Founder switches it back on |
 | Job stuck as `needs_attention` | The app could not confirm the print (queue stuck, printer error, app restarted mid-print) | Check the printer and the Windows print queue; shopkeeper resolves it in the app. The system never reprints by itself |
 | Job `failed` with printer not found | The chosen printer was renamed or removed | Printers button in the app, choose it again |
 | SmartScreen or antivirus blocks the installer | Unsigned file | See `DESKTOP_DISTRIBUTION.md`; report the false positive to Microsoft; click Run anyway |
-| Shopkeeper lost their link | | Issue a new one with `shop-link` and revoke the old with `revoke-link --label owner` (it revokes every login with that label, so use a distinct label per person) |
+| Shopkeeper lost their link | | Issue a new one with `shop-link` and revoke the old with `revoke-link ABC123 --label owner` (it revokes every login of that shop with that label, so use a distinct label per person) |
+| A helper with email sign-in has left | | `remove-email helper@example.com`: stops new sign-ins and the keys that address already has (needs migration 0010) |
 
 ## 5. Retention and deletion on request
 - Rules (decision O-5/O-10): drafts 1 hour; submitted orders up to 48 hours; finished orders +24 hours; unapproved jobs expire 1 hour after submit. Documents are deleted from storage with the records.
