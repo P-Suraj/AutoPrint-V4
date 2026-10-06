@@ -70,3 +70,5 @@ A customer sends a PDF from a phone (no account); the shopkeeper approves it in 
 - Keep it fast and smooth; efficient in both speed and cost. Report honestly: no claim without evidence, mark anything unverified.
 - Adoption bar: AutoPrint must be at least 50% more efficient than WhatsApp or email for both student and shopkeeper.
 - Claude Code runs on the founder laptop; if it sleeps, work pauses. Cloud sessions cannot reach the printer or local files.
+
+Migration 0009 is applied live (6 Oct 2026); email sign-in stays inactive until the Supabase settings and the publishable key are added.
