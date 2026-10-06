@@ -130,6 +130,10 @@ Each run leaves one completed order on the test shop TST001 (retained until the 
 - `POST /v1/internal/purge` and `ap_remote.py purge`: delete one finished order's files on request. Local tests pass; run live on a finished test order (1 file deleted, a repeat deleted none). The "refused while live" case was only checked locally.
 - 212 Python tests.
 
+## Rate limits (6 Oct 2026)
+
+Migration 0008 and `limit()` in the API: 60 new orders per 10 minutes per address, 300 per shop, 12 pairing codes per address; a fixed-window counter in the database, addresses hashed with a server secret and never stored. If the limiter itself fails the request is allowed, so a broken counter cannot stop a shop. Local tests pass (flood stopped at the 61st order, other addresses unaffected, pairing limited, no address stored). Applied live; normal order and pairing calls still succeed. **Not flood-tested live** (it would lock the founder own address for 10 minutes), and it is **not verified that Vercel passes the real client address in `X-Forwarded-For`** (if it did not, everyone would share one bucket and the 60 per 10 minutes cap would apply to all customers together; check by looking at the table after a real test). Other routes (uploads, quotes) are not limited yet. 215 Python tests.
+
 ## Customer connection (discussed, not built)
 
 Today a customer reaches a shop by scanning the counter QR or opening `/s/<SHOP CODE>`; no account. Decided on 5 Oct 2026, to build later: a home-page box where the customer types the short shop code (keep `ABC123`), typo correction by position (letter where digit belongs), case and dash insensitive, show shop name before upload, remember the last shop, optional add-to-home-screen, a printable counter poster. Open risk: no verified per-address rate limit on customer requests.
