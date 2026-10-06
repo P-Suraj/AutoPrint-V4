@@ -50,6 +50,13 @@ class Database:
             cur.execute(f"SELECT ap.{fn}({marks})", params)
             return cur.fetchone()[0]
 
+    def call_scalar(self, fn: str, *args: Any) -> Any:
+        """Call ap.<fn>(args) and return its single value as is (boolean, number)."""
+        marks = ", ".join(["%s"] * len(args))
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute(f"SELECT ap.{fn}({marks})", list(args))
+            return cur.fetchone()[0]
+
     def transaction(self, fn):
         """Run fn(cursor) as one all-or-nothing transaction (the pool is otherwise autocommit)."""
         with self._conn() as conn:

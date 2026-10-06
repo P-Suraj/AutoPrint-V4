@@ -182,8 +182,24 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
             raise ApiException("no_rate_card") from None
         return s.RateCardPublic(version=row[0], bw=s.RateTable(**row[1]["bw"]), color=s.RateTable(**row[1]["color"]))
 
+    def limit(request: Request, purpose: str, maximum: int, window_seconds: int, scope: str = "", by_address: bool = True) -> None:
+        """Fixed-window limit per caller address (hashed with a server secret; the address is never stored).
+        If the limiter itself fails the request is allowed: a broken counter must not stop a shop's customers."""
+        ip = (request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "?"))
+        bucket = sha256_hex(f"{settings.signing_key}|{purpose}|{scope}|{ip if by_address else '-'}")[:40]
+        try:
+            ok = db.call_scalar("rate_hit", bucket, window_seconds, maximum)
+        except Exception:
+            log.exception("rate limiter failed; allowing the request")
+            return
+        if not ok:
+            raise ApiException("rate_limited")
+
     @customer.post("/shops/{shop_code}/orders", response_model=s.CreateOrderResponse, status_code=201, operation_id="createOrder")
-    def create_order(shop_code: str):
+    def create_order(shop_code: str, request: Request):
+        # one address (a whole campus can share one) gets 60 new orders per 10 minutes; one shop 300 in total
+        limit(request, "order", 60, 600)
+        limit(request, "order-shop", 300, 600, scope=shop_code.strip().upper(), by_address=False)
         secret = secrets.token_hex(32)
         res = check(db.call("create_order", shop_code.strip().upper(), sha256_hex(secret)))
         return s.CreateOrderResponse(order_id=res["order_id"], order_secret=secret, short_code=res["short_code"],
@@ -305,7 +321,8 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
         return s.EnrollResponse(device_id=res["device_id"], device_secret=secret, shop_code=res["shop_code"], shop_name=res["shop_name"])
 
     @agent.post("/pair/start", response_model=s.PairStartResponse, status_code=201, operation_id="startPairing")
-    def pair_start(body: s.PairStartRequest):
+    def pair_start(body: s.PairStartRequest, request: Request):
+        limit(request, "pair", 12, 600)
         res = check(db.call("pair_start", sha256_hex(body.poll_token), sha256_hex(body.device_secret), body.display_name))
         code = res["code"]
         return s.PairStartResponse(pair_code=f"{code[:4]}-{code[4:]}", expires_at=res["expires_at"])

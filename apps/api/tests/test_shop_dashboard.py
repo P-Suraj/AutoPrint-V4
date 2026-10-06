@@ -175,3 +175,33 @@ def test_purge_deletes_the_files_of_a_finished_order_but_not_of_a_live_one(setti
         assert done.status_code == 200, done.text
         assert done.json()["documents_remaining"] == 0 and done.json()["documents_deleted_now"] >= 1
         assert c.post("/v1/internal/purge", headers=tok, json={"shop_code": shop.code, "order": "ZZZZ"}).status_code == 404
+
+
+def test_rate_limits_stop_a_flood_of_orders_but_not_normal_use(settings, shop):
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+    with TestClient(create_app(settings)) as c:
+        ip_a = {"X-Forwarded-For": "203.0.113.7"}
+        codes = [c.post(f"/v1/shops/{shop.code}/orders", headers=ip_a).status_code for _ in range(62)]
+        assert codes[:60] == [201] * 60                                              # a busy campus address is fine
+        assert codes[60:] == [429, 429]                                              # the flood is stopped
+        r = c.post(f"/v1/shops/{shop.code}/orders", headers=ip_a)
+        assert r.json()["error"]["code"] == "rate_limited"
+        assert c.post(f"/v1/shops/{shop.code}/orders", headers={"X-Forwarded-For": "198.51.100.9"}).status_code == 201   # others are unaffected
+
+
+def test_pairing_codes_are_limited_per_address(client):
+    ip = {"X-Forwarded-For": "203.0.113.50"}
+    results = []
+    for _ in range(14):
+        body = {"display_name": "PC", "poll_token": secrets.token_hex(32), "device_secret": secrets.token_hex(32)}
+        results.append(client.post("/v1/agent/pair/start", json=body, headers=ip).status_code)
+    assert results[:12] == [201] * 12 and results[12:] == [429, 429]
+
+
+def test_the_limiter_never_stores_an_address(settings, shop, raw_db):
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+    with TestClient(create_app(settings)) as c:
+        c.post(f"/v1/shops/{shop.code}/orders", headers={"X-Forwarded-For": "203.0.113.77"})
+    assert raw_db.one("SELECT count(*) FROM ap.rate_limits WHERE position('203.0.113' in bucket) > 0") == 0

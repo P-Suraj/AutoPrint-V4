@@ -12,16 +12,14 @@ from dbtools import MIGRATIONS, build_database, drop_database
 
 def test_migrate_applies_pending_files_once_and_is_idempotent(tmp_path):
     # a database that has everything except the newest migration, as the live one did before it was applied.
-    # Newest is 0007 (shop logins): remove its objects so the migration has something to create.
+    # Newest is 0008 (rate limits): remove its objects so the migration has something to create.
     newest = MIGRATIONS[-1].stem
-    assert newest == "0007_shop_logins", "update this test when a newer migration is added"
+    assert newest == "0008_rate_limits", "update this test when a newer migration is added"
     name = "v4_mig_" + uuid.uuid4().hex[:8]
     url = build_database(name)
     c = psycopg2.connect(url); c.autocommit = True
     cur = c.cursor()
-    cur.execute("DROP TABLE ap.shop_logins CASCADE")
-    cur.execute("DO $$ DECLARE r record; BEGIN FOR r IN SELECT p.oid::regprocedure AS f FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace "
-                "WHERE n.nspname='ap' AND p.proname LIKE 'shop\_%' LOOP EXECUTE 'DROP FUNCTION ' || r.f; END LOOP; END $$")
+    cur.execute("DROP TABLE ap.rate_limits CASCADE; DROP FUNCTION ap.rate_hit(text, integer, integer)")
     cur.execute("CREATE TABLE ap.schema_migrations (id text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())")
     for f in MIGRATIONS[:-1]:
         cur.execute("INSERT INTO ap.schema_migrations (id) VALUES (%s)", (f.stem,))
@@ -36,8 +34,8 @@ def test_migrate_applies_pending_files_once_and_is_idempotent(tmp_path):
             assert ok.json()["applied_now"] == [newest]
             again = client.post("/v1/internal/migrate", headers={"X-Maintenance-Token": "m" * 40}).json()
             assert again["applied_now"] == [] and again["applied_total"][-1] == newest
-        cur.execute("SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname='ap' AND proname LIKE 'shop\_%'")
-        assert cur.fetchone()[0] == 7                                           # and the migration really created its functions
+        cur.execute("SELECT ap.rate_hit('t', 60, 1), ap.rate_hit('t', 60, 1)")
+        assert cur.fetchone() == (True, False)                                    # and the migration really created the limiter
     finally:
         c.close()
         drop_database(name)
