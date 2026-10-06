@@ -11,7 +11,7 @@ namespace AutoPrint.Desktop;
 
 public partial class App : Application
 {
-    public const string Version = "4.0.1";
+    public const string Version = "4.0.2";
     private SingleInstance? _single;
     private System.Windows.Forms.NotifyIcon? _tray;
     private MainWindow? _window;
