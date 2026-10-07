@@ -70,3 +70,12 @@ Decided by the founder for Phase 9. **Nothing here is built yet**; payment work 
 ## Still awaiting approval
 
 D-1, D-2, D-3, D-4, D-6, D-7, D-8, D-9, D-10, D-11, D-13, D-14, D-16, D-17 remain PROPOSED. Most are technical choices that Phases 1-3 will test.
+
+## Deploy and delegated feature decisions (founder, 7 October 2026)
+
+| ID | Subject | Status |
+|---|---|---|
+| G-1 | Deploy the tested branch `wip/2026-10-06-unverified` (merge to `main`, push). Founder's word: "deploy" | DECIDED 2026-10-07 |
+| G-2 | The founder gives the AI model working on the project freedom to decide which features to add and to take product decisions, because he is a third-year BTech student and does not yet know everything the software needs. Limits he set in the same message: do not over-engineer; complete the remaining build. Earlier rules still stand (never touch V3, no secrets, never print twice without a person, free resources only, honest reporting, the design bar) | DECIDED 2026-10-07 |
+
+Decisions taken under G-2 are listed below as they are made, each marked "taken by the model under G-2" so the founder can overrule any of them.
