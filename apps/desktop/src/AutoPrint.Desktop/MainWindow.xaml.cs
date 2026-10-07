@@ -42,6 +42,7 @@ public partial class MainWindow : Window
     private readonly AlertPolicy _alerts = new();
     private readonly Dictionary<Guid, DateTimeOffset?> _busy = new();   // answers on their way: null = being sent, time = sent, waiting for the queue to show it
     private Guid? _confirmRetry;
+    private readonly HashSet<string> _openOrders = new();              // orders whose files are shown one by one ("View files")
     private string? _notice;
     private DateTimeOffset _noticeAt, _shiftedAt, _pairExpires;
     private bool _pairing, _pairOffline, _toldAboutTray;
@@ -417,12 +418,22 @@ public partial class MainWindow : Window
             waiting = waiting.Where(j => JobText.Matches(j, query)).ToList();
         }
         var wanted = new List<Wanted>();
-        void Section(string key, string title, string colour, List<JobSummary> list)
+        void Section(string key, string title, string colour, List<JobSummary> list, bool bundle = false)
         {
             if (list.Count == 0) return;
             wanted.Add(new("h:" + key, title, () => (new TextBlock { Text = title, Style = Ui.Res<Style>("Eyebrow"), Foreground = Ui.Brush(colour), FontSize = 12, Margin = new Thickness(2, 4, 0, 8) }, null)));
+            var bundled = new HashSet<string>();
             foreach (var j in list)
             {
+                // one customer, several files waiting: one card for the order, answered together or file by file
+                if (bundle && j.OrderFiles > 1 && list.Where(x => x.OrderShortCode == j.OrderShortCode).ToList() is { Count: > 1 } files)
+                {
+                    if (!bundled.Add(j.OrderShortCode)) continue;
+                    bool shown = _openOrders.Contains(j.OrderShortCode);
+                    var all = $"{shown}|{Offline}|" + string.Join(";", files.Select(f => $"{f.JobId:N}|{_busy.ContainsKey(f.JobId)}|{Block(f, s)}|{Caution(f)}|{f.DocumentName}|{f.AmountPaise}|{f.ApprovalExpiresAt}|{f.OrderFiles}|{f.OrderTotalPaise}"));
+                    wanted.Add(new("o:" + j.OrderShortCode, all, () => OrderCard(files, s, shown)));
+                    continue;
+                }
                 bool busy = _busy.ContainsKey(j.JobId);
                 string? block = Block(j, s);
                 var stage = s.Current is { } c && c.JobId == j.JobId ? c.Stage : Stage.Idle;
@@ -434,7 +445,8 @@ public partial class MainWindow : Window
         }
         Section("attention", attention.Count == 1 ? "NEEDS YOUR ATTENTION" : $"NEEDS YOUR ATTENTION  ·  {attention.Count}", "Err", attention);
         Section("printing", printing.Any(j => j.Status == JobStatus.Printing) ? "PRINTING NOW" : "APPROVED", "Brand", printing);
-        Section("waiting", waiting.Count == 1 ? "WAITING FOR YOU" : $"WAITING FOR YOU  ·  {waiting.Count}", "Muted", waiting);
+        Section("waiting", waiting.Count == 1 ? "WAITING FOR YOU" : $"WAITING FOR YOU  ·  {waiting.Count}", "Muted", waiting, bundle: true);
+        _openOrders.RemoveWhere(code => !waiting.Any(j => j.OrderShortCode == code) && query.Length == 0);
         SyncList(Cards, _cardEntries, wanted, animate: true);
         foreach (var e in _cardEntries.Values) e.Live?.Invoke(now);
 
@@ -601,6 +613,124 @@ public partial class MainWindow : Window
         }
         var card = new Border { Style = Ui.Res<Style>("CardBox"), BorderBrush = Ui.Brush(border), Child = body };
         return (card, live);
+    }
+
+    // ---------------------------------------------------------------- one order with several files waiting
+    /// <summary>All the waiting files of one order on one card. The shopkeeper answers them together, or opens
+    /// "View files" and answers each by itself. Every file is still its own job: each is approved, printed and
+    /// reported separately, so nothing about printing changes.</summary>
+    private (UIElement, Action<DateTimeOffset>?) OrderCard(IReadOnlyList<JobSummary> files, AgentState s, bool shown)
+    {
+        var first = files[0];
+        var body = new StackPanel();
+        var timing = new Facts(); var waited = timing.Add("", "Soft"); var expiry = timing.Add("", "Soft");
+
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition());
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var code = new StackPanel { Margin = new Thickness(0, 0, 22, 0), MinWidth = 96 };
+        code.Children.Add(Ui.T("ORDER CODE", "Eyebrow"));
+        code.Children.Add(Ui.T(first.OrderShortCode, "OrderCode"));
+        grid.Children.Add(code);
+
+        var mid = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        mid.Children.Add(Ui.T($"{files.Count} files from one customer", "H2"));
+        var detail = new Facts { Margin = new Thickness(0, 3, 0, 0) };
+        detail.Add(JobText.Plural(files.Sum(JobText.Sides), "side", "sides") + " in all");
+        if (files.Any(f => f.Color)) { var c = detail.Add(files.All(f => f.Color) ? "Colour" : "Some in colour"); c.Foreground = Ui.Brush("Brand"); c.FontWeight = FontWeights.SemiBold; }
+        mid.Children.Add(detail);
+        timing.Margin = new Thickness(0, 2, 0, 0); mid.Children.Add(timing);
+        Grid.SetColumn(mid, 1); grid.Children.Add(mid);
+
+        int sum = files.Sum(f => f.AmountPaise);
+        var pay = new StackPanel { Margin = new Thickness(22, 0, 0, 0) };
+        var label = Ui.T("TO COLLECT", "Eyebrow"); label.HorizontalAlignment = HorizontalAlignment.Right;
+        pay.Children.Add(label);
+        pay.Children.Add(Ui.T(JobText.Money(sum), "Amount"));
+        // some files of the order were already answered: the amount above is for the files still waiting here
+        if (files.Count < first.OrderFiles)
+        {
+            var part = Ui.T($"for these {files.Count} of {first.OrderFiles} files", "Soft"); part.HorizontalAlignment = HorizontalAlignment.Right; part.TextWrapping = TextWrapping.NoWrap;
+            pay.Children.Add(part);
+        }
+        Grid.SetColumn(pay, 2); grid.Children.Add(pay);
+        body.Children.Add(grid);
+
+        Action<DateTimeOffset> live = now =>
+        {
+            bool soon = JobText.ExpiresSoon(first, now);
+            string wait = JobText.Waiting(first, now); string? ends = JobText.Expiry(first, now);
+            if (waited.Text != wait) waited.Text = wait;
+            if (expiry.Text != (ends ?? "")) { expiry.Text = ends ?? ""; expiry.Visibility = ends is null ? Visibility.Collapsed : Visibility.Visible; }
+            var ink = Ui.Brush(soon ? "Warn" : "Muted"); var weight = soon ? FontWeights.SemiBold : FontWeights.Normal;
+            if (!ReferenceEquals(expiry.Foreground, ink)) { waited.Foreground = expiry.Foreground = ink; waited.FontWeight = expiry.FontWeight = weight; timing.Dot = ink; }
+        };
+
+        var free = files.Where(f => !_busy.ContainsKey(f.JobId)).ToList();          // not already being answered
+        bool busy = free.Count == 0;
+        string? block = files.Select(f => Block(f, s)).FirstOrDefault(b => b is not null);
+        string? caution = files.Select(Caution).FirstOrDefault(c => c is not null);
+        bool can = !busy && !Offline;
+
+        if (shown)
+        {
+            body.Children.Add(new Border { Height = 1, Background = Ui.Brush("Line"), Margin = new Thickness(0, 14, 0, 0) });
+            foreach (var f in files) body.Children.Add(FileRow(f, s));
+            body.Children.Add(new Border { Height = 1, Background = Ui.Brush("Line") });
+        }
+        if ((busy ? "Sending your answer…" : Offline ? "No internet. You can answer when it is back." : block ?? caution) is { } why)
+        {
+            var note = Ui.T(why, "Soft", busy || Offline ? null : block is not null ? "Err" : "Warn"); note.TextAlignment = TextAlignment.Right; note.Margin = new Thickness(0, 12, 0, -4);
+            body.Children.Add(note);
+        }
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 12, 0, 0) };
+        var rejectAll = Ui.B("Reject all", "Danger"); rejectAll.IsEnabled = can;
+        rejectAll.Click += (_, _) => { if (!Shifted()) foreach (var f in free) _ = Answer(f.JobId, () => _api!.RejectAsync(f.JobId, null, _cts.Token)); };
+        buttons.Children.Add(rejectAll);
+        var view = Ui.B(shown ? "Hide files" : "View files"); view.Margin = new Thickness(8, 0, 8, 0);
+        view.Click += (_, _) => { if (!_openOrders.Remove(first.OrderShortCode)) _openOrders.Add(first.OrderShortCode); Render(); };
+        buttons.Children.Add(view);
+        var approveAll = Ui.B(free.Count == files.Count ? "Approve and print all" : $"Approve and print the other {free.Count}", "Primary"); approveAll.IsEnabled = can && block is null;
+        approveAll.Click += (_, _) => { if (!Shifted()) foreach (var f in free) _ = Answer(f.JobId, () => _api!.ApproveAsync(f.JobId, _cts.Token)); };
+        buttons.Children.Add(approveAll);
+        body.Children.Add(buttons);
+
+        return (new Border { Style = Ui.Res<Style>("CardBox"), BorderBrush = Ui.Brush("Line"), Child = body }, live);
+    }
+
+    /// <summary>One file of an order card: what it is, what it costs, and its own three answers.</summary>
+    private UIElement FileRow(JobSummary j, AgentState s)
+    {
+        bool busy = _busy.ContainsKey(j.JobId);
+        string? block = Block(j, s);
+        bool can = !busy && !Offline;
+        var g = new Grid { Margin = new Thickness(0, 12, 0, 12) };
+        g.ColumnDefinitions.Add(new ColumnDefinition());
+        g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto, MinWidth = 64 });
+        g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var mid = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        var name = Ui.T(j.DocumentName); name.FontWeight = FontWeights.SemiBold; name.TextWrapping = TextWrapping.NoWrap; name.TextTrimming = TextTrimming.CharacterEllipsis; name.ToolTip = j.DocumentName;
+        mid.Children.Add(name);
+        var detail = new Facts { Margin = new Thickness(0, 2, 0, 0) };
+        detail.Add(JobText.Pages(j), "Soft"); detail.Add(JobText.Plural(j.Copies, "copy", "copies"), "Soft");
+        var colour = detail.Add(JobText.Colour(j), "Soft"); if (j.Color) { colour.Foreground = Ui.Brush("Brand"); colour.FontWeight = FontWeights.SemiBold; }
+        detail.Add(JobText.SidesChoice(j), "Soft");
+        mid.Children.Add(detail);
+        if (busy) { var sending = Ui.T("Sending your answer…", "Soft"); sending.Margin = new Thickness(0, 2, 0, 0); mid.Children.Add(sending); }
+        g.Children.Add(mid);
+
+        var amount = Ui.T(JobText.Money(j.AmountPaise)); amount.FontSize = 17; amount.FontWeight = FontWeights.SemiBold; amount.HorizontalAlignment = HorizontalAlignment.Right; amount.VerticalAlignment = VerticalAlignment.Center; amount.Margin = new Thickness(12, 0, 16, 0);
+        Grid.SetColumn(amount, 1); g.Children.Add(amount);
+
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        buttons.Children.Add(AnswerButton("Reject", "Danger", can, j, guard: true, () => _api!.RejectAsync(j.JobId, null, _cts.Token)));
+        var preview = Ui.B("Preview"); preview.Margin = new Thickness(8, 0, 8, 0); preview.IsEnabled = can; preview.Click += (_, _) => OpenPreview(j, block);
+        buttons.Children.Add(preview);
+        buttons.Children.Add(AnswerButton("Approve", "Primary", can && block is null, j, guard: true, () => _api!.ApproveAsync(j.JobId, _cts.Token)));
+        Grid.SetColumn(buttons, 2); g.Children.Add(buttons);
+        return new Border { BorderBrush = Ui.Brush("Line"), BorderThickness = new Thickness(0, 1, 0, 0), Child = g };
     }
 
     /// <summary>The order code and the amount carry the card: they are what the customer says and what the shopkeeper collects.</summary>
@@ -941,9 +1071,10 @@ public partial class MainWindow : Window
             : "No internet" + (_state.LastPollAt is { } last ? $". Last contact {last.ToLocalTime():h:mm tt}" : ""));
 
     // ---------------------------------------------------------------- for the UI self-test (fake data only)
-    internal void Demo(DeviceCredentials creds, AgentState state, Health? health, bool finishedTab = false, string search = "", Guid? confirm = null, string? notice = null, Guid? stillQueued = null, bool removeFailed = false, params RunResult[] runs)
+    internal void Demo(DeviceCredentials creds, AgentState state, Health? health, bool finishedTab = false, string search = "", Guid? confirm = null, string? notice = null, Guid? stillQueued = null, bool removeFailed = false, string? openOrder = null, params RunResult[] runs)
     {
         _state = state; _health = health; _confirmRetry = confirm; _notice = notice; _noticeAt = Clock();
+        if (openOrder is not null) _openOrders.Add(openOrder);
         _retryStep = removeFailed ? RetryStep.RemoveFailed : RetryStep.Confirm;
         if (stillQueued is { } queued) _queueLook[queued] = QueueLook.Waiting;
         foreach (var r in runs) { _runs[r.JobId!.Value] = r; if (r.Kind == RunKind.Failed) _failedRun = r; }

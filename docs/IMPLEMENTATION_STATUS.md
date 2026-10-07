@@ -482,3 +482,12 @@ On the founder word "deploy": `wip/2026-10-07-shop-settings-multi-file` merged i
 ## Live database at 0020 (7 October 2026, run by the founder)
 
 The founder ran `ap_remote.py migrate` and pasted the output: "Applied now: 1, 0020_shop_settings", then `status`: 20 updates applied, 0020 at 2026-10-07 08:57 (UTC), "Nothing pending: the database matches the code that is live." Taken from his pasted output; the model session cannot run these. Still not checked live: the dashboard price panel, a several-file order, the download button (no release yet).
+
+## Windows app 4.0.6: one card per order (7 October 2026, night, local only)
+
+Founder request H-7. Only `MainWindow.xaml.cs` (new `OrderCard`, `FileRow`, grouping in `Render`) and one self-test scene changed; the server and the website are untouched. Two or more waiting files of one order (same order code, `order_files` above 1) are one card with "Reject all", "View files"/"Hide files" and "Approve and print all"; the opened list gives each file its own Reject, Preview and Approve. "All" sends one answer per file through the same guarded path as a single answer (a second click cannot send twice). Jobs that are printing, approved or need attention keep their own cards.
+
+- **Checked:** `dotnet build` clean; `dotnet test apps/desktop/tests/AutoPrint.Core.Tests`: 172 passed, 7 skipped; `AutoPrint.exe --selftest-ui` exit 0, pictures 29 (closed card), 30 (files shown, at 906 px and at the smallest window) looked at by the model.
+- **Installer:** `dist\AutoPrintSetup-4.0.6.exe`, 59.0 MB, SHA-256 `0f762c694ab6aac9deabf76416f4c8ee3ad5ef28c0b2b92601d1e95db8fd053f`; `dist\AutoPrintSetup.exe` is the same bytes (hash compared). 4.0.5 was never installed or released by the model; if the founder already published a 4.0.5 release, publish 4.0.6 as a new one.
+- **Not verified:** no button on the new card was pressed against a server (no automatic test covers the card; it is view code); a real several-file order; "Reject all" has no confirmation question, like the single Reject; the `live` and `soak` self-test modes were not re-run; no install, no Defender scan.
+- **Windows versions (H-8):** Windows 10 version 1903 or later and Windows 11, 64-bit. Not Windows 7, 8 or any 32-bit Windows. Read from `AutoPrint.iss` and the project file; not tried on any PC but this one (Windows 11).
