@@ -430,3 +430,14 @@ Output pasted by the founder into the session, not run by the model:
 - `ap_remote.py status` after: 19 applied, 0010 to 0019 all stamped 2026-10-07 04:05 (UTC), "Nothing pending: the database matches the code that is live."
 
 This is also the first live run of the `status` and `migrate` commands, and it shows the new API ran against the 0009 database for a while without the site or its database check going down. **Still not checked live:** an order from start to finish on the new code and database (`e2e/run_live_e2e.py` and one PDF from a real phone), and the backfill of 0015 (that already-deleted documents now read "deleted file").
+
+## Whole chain on the live site after the deploy: PASS (7 October 2026, run by the founder)
+
+`e2e/run_live_e2e.py`, output pasted by the founder: verdict PASS on the new code with all 19 migrations. Order UVW3 on TST001, 2 pages sent, 2 pages in the virtual printer's file, outcome `rule_v2_satisfied`, device disconnected afterwards.
+- Customer side: new order to submitted 2.1 s; "approved" 1.9 s, "printing" 2.5 s and "completed" 11.2 s after submit.
+- Shop side: paired 0.67 s; job visible 5.18 s; approved 5.29 s; claimed 5.90 s; downloading 6.06 s; printing 6.65 s to 12.74 s; reporting 14.27 s; finished 14.69 s.
+- "shop computer connected after 15.3 s" at the start (includes building and starting the test program; possibly a cold start of the host; not separated).
+
+**Slower than the run of 5 October** (completed 5.9 s after submit then, 11.2 s now). The difference is in the printing stage, about 6 s here against about 2 s in the local run of the same day. Cause not investigated: one run, on the founder's network, with the virtual printer. Compare again on the real printer before reading anything into it.
+
+Still not checked: a real phone on the live site, the installed 4.0.4 app, any physical printer.
