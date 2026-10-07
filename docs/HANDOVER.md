@@ -88,7 +88,7 @@ Migration 0009 is applied live (6 Oct 2026); email sign-in stays inactive until 
 ### Next steps, in order (all for the founder; `PY` = `apps\api\.venv\Scripts\python.exe`)
 1. DONE 7 October: `PY scripts\ap_remote.py status`.
 2. DONE 7 October: `PY scripts\ap_remote.py migrate` (10 applied, then "Nothing pending").
-3. `PY e2e\run_live_e2e.py` (whole chain on the live site with the virtual printer), then send one PDF from a real phone at `https://autoprint-v4.vercel.app/s/TST001`.
+3. DONE 7 October: `PY e2e\run_live_e2e.py` PASS on the new code and database (completed 11.2 s after submit). Still to do: send one PDF from a real phone at `https://autoprint-v4.vercel.app/s/TST001`.
 4. Install `dist\AutoPrintSetup-4.0.4.exe` over the installed copy, open Settings, **choose the real printer**, press "Print a test page" (and "Test the colour printer" if there is one), then follow `docs/TEST_THE_WINDOWS_APP.md`.
 5. Add the GitHub secret `AUTOPRINT_MAINTENANCE_TOKEN` (the cleanup workflow fails until then); in Supabase set the `print-documents` bucket to 25 MB and `application/pdf` only.
 6. Physical certification at the shop with `docs/pilot/` (30 to 50 real prints, duplex, colour, failure drills, record what the real driver reports). Until then the page says "Sent to printer", never "Printed".
