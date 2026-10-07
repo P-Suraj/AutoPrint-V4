@@ -260,7 +260,7 @@ def test_the_shop_poll_still_delivers_the_queue_when_cleanup_cannot_delete_anyth
     assert r.status_code == 200 and [j["job_id"] for j in r.json()["jobs"]] == [job]
     assert raw_db.one("SELECT last_sweep_at > now() - interval '1 minute' FROM ap.system_state") is True
     assert all(storage.exists(key) for _, key in docs)                            # nothing deleted, nothing marked
-    assert raw_db.one("SELECT count(*) FROM ap.documents WHERE id = ANY(%s) AND deleted_at IS NULL", ([d for d, _ in docs],)) == 2
+    assert raw_db.one("SELECT count(*) FROM ap.documents WHERE id = ANY(%s::uuid[]) AND deleted_at IS NULL", ([d for d, _ in docs],)) == 2
     storage.nothing_deletable = False
     assert client.post("/v1/internal/maintenance", headers=TOKEN).json()["documents_failed"] == 0
     assert not any(storage.exists(key) for _, key in docs)

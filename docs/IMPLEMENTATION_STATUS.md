@@ -265,3 +265,27 @@ Could not assess: Supabase dashboard settings (bucket privacy and limits, Auth),
 - **AutoPrint has the payment record (`ap.payments`) but no eligibility check:** `approve_job` and `claim_next_job` never read the payment, although BUILD_PHASES says the check exists.
 - FinFlow's outbound signed event differs from its own document and gives up after 5 tries in about 7.5 minutes; intents never expire. Not deployed, not sandbox-verified. No host was found that is free, needs no card and is always on; the nearest is a UPI-paid server at a reported Rs 360 to 400 a month (unverified).
 - The AutoPrint side (13 steps, default OFF per shop) can be built and tested now against a fake FinFlow. The real integration is blocked on FinFlow changes and on 14 founder questions listed in the design, each with a recommendation.
+
+## Verification of the wip branch (7 October 2026)
+
+The branch `wip/2026-10-06-unverified` was re-tested area by area on the founder PC with no other agent running. **Everything below is local only: nothing was merged to `main`, deployed, or applied to the live database.**
+
+| Area | Command | Result |
+|---|---|---|
+| Python (API and database) | `apps\api\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider` | First run 268 passed, 1 failed; after the test fix below, `test_resilience.py` 13 passed (the full suite is re-run before the merge, see the next section) |
+| Cancel-versus-claim race and lock order (0013, 0014) | `pytest supabase/tests/test_state_machine.py::test_cancel_racing_claim_has_exactly_one_winner supabase/tests/test_lock_order.py`, 5 times | 12 passed each time |
+| Web type check, unit tests, build | `npx tsc --noEmit`, `npx vitest run`, `npm run build` in `apps/web` | clean; 72 passed; built, main bundle 73.21 KB gzipped |
+| Web browser tests | `E2E_CHANNEL=msedge apps/api/.venv/Scripts/python.exe e2e/run_web_e2e.py` | 17 passed (Edge, Pixel 7 profile) |
+| Windows app build and tests | `dotnet build apps/desktop -c Release`; `dotnet test apps/desktop/tests/AutoPrint.Core.Tests --filter "FullyQualifiedName!~LiveE2ETests"` | 0 warnings; 161 passed, 5 skipped |
+| Windows app tests with the real spooler | the same with `AP_REAL_PRINTER=AutoPrint-Spike-PDF` and `AP_SUMATRA=...\tools\SumatraPDF.exe` | 166 passed, 0 skipped |
+| Windows app in-process run | `AutoPrint.exe --selftest-ui <folder> live` (Release build) | exit 0, 61 PASS, 0 FAIL |
+| Whole chain on this PC | `apps/api/.venv/Scripts/python.exe e2e/run_local_chain.py` | PASS: customer saw "printing" 1.0 s and "completed" 5.1 s after submit; 2 pages out for 2 sent |
+
+Findings:
+- **The failing cancel-versus-claim race of 6 Oct was connection exhaustion, not migration 0014.** With the database to itself the test passed in the full run and in 5 repeats together with the lock-order tests. 0014 is no longer suspected.
+- **The other failure was a bug in the test, now fixed** (`apps/api/tests/test_resilience.py`: the document ids are cast with `%s::uuid[]`). No application code changed.
+- Migrations 0014 to 0018 were read in full: each is a complete file, and each replaces one function. Only 0015 changes data (the irreversible blanking of names and checksums of already-deleted documents).
+- The desktop core works against the reordered queue of 0017 (the local chain and the in-process run both use it).
+- The three small desktop edits made after the agent's last real-spooler run are now covered: the 166 real-spooler tests and the 61-step run were repeated on the final code.
+
+Still not verified on this branch: anything on the live site or live database; a physical printer; WebKit; real phones; the "Test the colour printer" button on a real printer; the items the agents listed as "changed, no dedicated test" (see the handover) unless a later section says otherwise.
