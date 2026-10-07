@@ -231,11 +231,36 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
             raise ApiException("no_rate_card") from None
         return s.RateCardPublic(version=row[0], bw=s.RateTable(**row[1]["bw"]), color=s.RateTable(**row[1]["color"]))
 
+    def limit_bucket(request: Request, purpose: str, scope: str = "", by_address: bool = True) -> str:
+        ip = (request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "?"))
+        return sha256_hex(f"{settings.limiter_secret}|{purpose}|{scope}|{ip if by_address else '-'}")[:40]
+
+    def in_one_trip(sql: str, params: tuple) -> Optional[tuple]:
+        """Runs the limiter, the secret check and the work of a customer request as ONE statement (one round trip to
+        the database instead of one per step). The statement is a CASE: PostgreSQL evaluates its branches in order
+        and stops at the first that applies, so the order of checks is the order the steps had one by one.
+
+        Returns None when the caller must do the steps one by one instead (each handler keeps that path):
+          * a value cannot be stored as text (InvalidText). One by one, the limiter and the secret are still checked
+            first, so the caller gets the same answer in the same order as before
+          * the database refused the statement as a whole (for example the limiter is broken). One statement is one
+            transaction, so nothing was kept. One by one, a broken limiter is skipped and the customer is served
+        A lost connection, a deadlock or a statement over its time limit is NOT retried: it goes to the caller as
+        "try again" (503), as for every other statement."""
+        try:
+            return db.one(sql, params)
+        except InvalidText:
+            return None
+        except (psycopg2.OperationalError, psycopg2.InterfaceError):
+            raise
+        except psycopg2.Error as exc:
+            log.error("combined statement failed (%s %s); doing the steps one by one", type(exc).__name__, exc.pgcode or "-")
+            return None
+
     def limit(request: Request, purpose: str, maximum: int, window_seconds: int, scope: str = "", by_address: bool = True) -> None:
         """Fixed-window limit per caller address (hashed with a server secret; the address is never stored).
         If the limiter itself fails the request is allowed: a broken counter must not stop a shop's customers."""
-        ip = (request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "?"))
-        bucket = sha256_hex(f"{settings.limiter_secret}|{purpose}|{scope}|{ip if by_address else '-'}")[:40]
+        bucket = limit_bucket(request, purpose, scope, by_address)
         try:
             ok = db.call_scalar("rate_hit", bucket, window_seconds, maximum)
         except Exception:
@@ -247,10 +272,23 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
     @customer.post("/shops/{shop_code}/orders", response_model=s.CreateOrderResponse, status_code=201, operation_id="createOrder")
     def create_order(shop_code: str, request: Request):
         # one address (a whole campus can share one) gets 60 new orders per 10 minutes; one shop 300 in total
-        limit(request, "order", 60, 600)
-        limit(request, "order-shop", 300, 600, scope=shop_code.strip().upper(), by_address=False)
+        code = shop_code.strip().upper()
         secret = secrets.token_hex(32)
-        res = check(db.call("create_order", shop_code.strip().upper(), sha256_hex(secret)))
+        # One round trip: both limits and the new order. A refused limit ends the CASE, so the later steps do not run.
+        row = in_one_trip(
+            "SELECT CASE WHEN ap.rate_hit(%s, 600, 60) IS NOT TRUE THEN NULL "
+            "WHEN ap.rate_hit(%s, 600, 300) IS NOT TRUE THEN NULL "
+            "ELSE ap.create_order(%s, %s) END",
+            (limit_bucket(request, "order"), limit_bucket(request, "order-shop", code, False), code, sha256_hex(secret)))
+        if row is None:                                       # the steps one by one
+            limit(request, "order", 60, 600)
+            limit(request, "order-shop", 300, 600, scope=code, by_address=False)
+            res = db.call("create_order", code, sha256_hex(secret))
+        elif row[0] is None:
+            raise ApiException("rate_limited")
+        else:
+            res = row[0]
+        check(res)
         return s.CreateOrderResponse(order_id=res["order_id"], order_secret=secret, short_code=res["short_code"],
                                      expires_at=res["expires_at"], access_until=res["access_until"])
 
@@ -259,12 +297,28 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
         # Every job needs its own registered file, and a job waits for approval for at most one hour, so this is also
         # the cap on jobs one address can have waiting at a shop: 120 files an hour (a single customer needs at most
         # the 20 files of one order; the rest is room for a campus that shares one address).
-        limit(request, "upload", 120, 3600)
-        authorize_order(order_id, x_order_secret)
-        if body.byte_size > settings.max_upload_bytes:
-            raise ApiException("file_too_large")
         key = f"orders/{order_id}/{uuid4().hex}.pdf"
-        res = check(db.call("register_document", order_id, body.file_name, body.byte_size, key))
+        too_large = body.byte_size > settings.max_upload_bytes
+        # One round trip: the limit, the secret, then the registration (not attempted for a file that is too large).
+        gate = ("SELECT CASE WHEN ap.rate_hit(%s, 3600, 120) IS NOT TRUE THEN jsonb_build_object('refused', 'rate_limited') "
+                "WHEN ap.order_for_secret(%s) IS DISTINCT FROM %s THEN jsonb_build_object('refused', 'order_not_found') ")
+        params = (limit_bucket(request, "upload"), sha256_hex(x_order_secret), order_id)
+        if too_large:
+            row = in_one_trip(gate + "ELSE jsonb_build_object('refused', 'file_too_large') END", params)
+        else:
+            row = in_one_trip(gate + "ELSE ap.register_document(%s, %s, %s, %s) END",
+                              params + (order_id, body.file_name, body.byte_size, key))
+        if row is None:                                       # the steps one by one
+            limit(request, "upload", 120, 3600)
+            authorize_order(order_id, x_order_secret)
+            if too_large:
+                raise ApiException("file_too_large")
+            res = db.call("register_document", order_id, body.file_name, body.byte_size, key)
+        elif "refused" in row[0]:
+            raise ApiException(row[0]["refused"])
+        else:
+            res = row[0]
+        check(res)
         grant = storage.create_upload(key, body.byte_size)
         return s.RegisterDocumentResponse(document_id=res["document_id"], upload_url=grant.url, upload_headers=grant.headers)
 
@@ -301,15 +355,32 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
 
     @customer.post("/orders/{order_id}/quote", response_model=s.QuoteResponse, status_code=201, operation_id="createQuote")
     def create_quote(order_id: UUID, body: s.CreateQuoteRequest, request: Request, x_order_secret: str = Header(...)):
-        limit(request, "quote", 300, 600)
-        authorize_order(order_id, x_order_secret)
-        rate = db.one("SELECT r.id, r.version, r.rules FROM ap.rate_cards r JOIN ap.orders o ON o.shop_id = r.shop_id "
-                      "WHERE o.id = %s AND r.retired_at IS NULL", (order_id,))
+        # First round trip: the limit, the secret, the shop's price list and the page counts of this order's files,
+        # all read at the same instant. The price list and the files are only looked at when the gate says "ok".
+        row = in_one_trip(
+            "WITH g AS MATERIALIZED (SELECT CASE WHEN ap.rate_hit(%s, 600, 300) IS NOT TRUE THEN 'rate_limited' "
+            "WHEN ap.order_for_secret(%s) IS DISTINCT FROM %s THEN 'order_not_found' ELSE 'ok' END AS gate) "
+            "SELECT g.gate, rc.id, rc.version, rc.rules, "
+            "(SELECT jsonb_object_agg(d.id::text, d.page_count) FROM ap.documents d "
+            "WHERE g.gate = 'ok' AND d.order_id = %s AND d.status = 'validated') "
+            "FROM g LEFT JOIN LATERAL (SELECT r.id, r.version, r.rules FROM ap.rate_cards r "
+            "JOIN ap.orders o ON o.shop_id = r.shop_id WHERE g.gate = 'ok' AND o.id = %s AND r.retired_at IS NULL LIMIT 1) rc ON true",
+            (limit_bucket(request, "quote"), sha256_hex(x_order_secret), order_id, order_id, order_id))
+        if row is None:                                       # the steps one by one
+            limit(request, "quote", 300, 600)
+            authorize_order(order_id, x_order_secret)
+            rate = db.one("SELECT r.id, r.version, r.rules FROM ap.rate_cards r JOIN ap.orders o ON o.shop_id = r.shop_id "
+                          "WHERE o.id = %s AND r.retired_at IS NULL", (order_id,))
+            pages = None if rate is None else {str(r[0]): r[1] for r in db.rows(
+                "SELECT id, page_count FROM ap.documents WHERE order_id = %s AND status = 'validated'", (order_id,))}
+        elif row[0] != "ok":
+            raise ApiException(row[0])
+        else:
+            rate = None if row[1] is None else row[1:4]
+            pages = row[4] or {}
         if rate is None:
             raise ApiException("no_rate_card")
         rate_id, version, rules = rate
-        pages = {str(r[0]): r[1] for r in db.rows(
-            "SELECT id, page_count FROM ap.documents WHERE order_id = %s AND status = 'validated'", (order_id,))}
         items, total = [], 0
         for item in body.items:
             page_count = pages.get(str(item.document_id))
@@ -335,9 +406,16 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
 
     @customer.post("/orders/{order_id}/submit", response_model=s.SubmitOrderResponse, operation_id="submitOrder")
     def submit_order(order_id: UUID, body: s.SubmitOrderRequest, x_order_secret: str = Header(...)):
-        authorize_order(order_id, x_order_secret)
-        res = check(db.call("submit_order", order_id, body.quote_id))
-        pay = db.one("SELECT mode, status, amount_paise FROM ap.payments WHERE order_id = %s", (order_id,))
+        # One round trip: the secret check and the submission. Nothing here can fail as text, and there is no limiter.
+        res = db.one("SELECT CASE WHEN ap.order_for_secret(%s) IS DISTINCT FROM %s THEN NULL ELSE ap.submit_order(%s, %s) END",
+                     (sha256_hex(x_order_secret), order_id, order_id, body.quote_id))[0]
+        if res is None:
+            raise ApiException("order_not_found")             # same answer for "wrong secret" and "no such order"
+        check(res)
+        if "payment_mode" in res:                             # ap.submit_order from migration 0019 answers with the payment
+            pay = (res["payment_mode"], res["payment_status"], res["amount_paise"])
+        else:                                                 # a database without 0019: read the payment, as before
+            pay = db.one("SELECT mode, status, amount_paise FROM ap.payments WHERE order_id = %s", (order_id,))
         return s.SubmitOrderResponse(order_id=order_id, job_ids=res["job_ids"], approval_expires_at=res["expires_at"],
                                      payment_mode=pay[0], payment_status=pay[1], amount_paise=pay[2])
 

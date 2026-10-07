@@ -12,9 +12,9 @@ from dbtools import MIGRATIONS, build_database, drop_database
 
 def test_migrate_applies_pending_files_once_and_is_idempotent(tmp_path):
     # a database that has everything except the newest migration, as the live one did before it was applied.
-    # Newest is 0018 (cap on waiting jobs): drop the function it replaces so the migration has something to create.
+    # Newest is 0019 (submit answers with the payment): drop the function it replaces so the migration has something to create.
     newest = MIGRATIONS[-1].stem
-    assert newest == "0018_waiting_jobs_cap", "update this test when a newer migration is added"
+    assert newest == "0019_submit_answers_with_payment", "update this test when a newer migration is added"
     name = "v4_mig_" + uuid.uuid4().hex[:8]
     url = build_database(name)
     c = psycopg2.connect(url); c.autocommit = True

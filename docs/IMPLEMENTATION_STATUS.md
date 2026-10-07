@@ -309,3 +309,34 @@ Still not verified on this branch: anything on the live site or live database; a
 
 - **Open:** on the slow profile the preview takes 11.9 s after a file is chosen (pdf.js and its 1.4 MB worker are downloaded then). Whether the customer can press Continue before the preview is drawn was not checked here; handed to the website work of the same day.
 - **Changed, see the next section for test results:** the status page asks every 2 s while a job is approved or printing (was 4 s), so the result shows up to 2 s sooner at the counter; a handful of extra calls per order.
+
+## Backend: tests for the review fixes, fewer database round trips (7 October 2026, local only)
+
+Done by a backend sub-agent; its report is folded in here. The lead read the whole diff of `apps/api/app/main.py` and migration 0019 afterwards; the lead's own full-suite run is recorded in the closing section of this day. **Nothing is deployed and 0019 is applied nowhere but test databases.**
+
+**Tests for changes that had none** (`apps/api/tests/test_review_fixes.py`, 22 tests, written by the lead, passed on their first run with no application change): page range refuses non-ASCII digits, tabs and line breaks and is stored in one normal form (`1,1,1` is priced and stored as `1`); purge takes one order among several with the same code (most recent, or `--which N`), and bad `which` values are refused; the limiter is salted from the Supabase secret key or the maintenance token when no signing key is set, and the stored bucket differs per secret; 120 file registrations per address per hour, the 121st answers 429, other addresses unaffected; `GET /v1/internal/status` (401 without the token, lists applied and pending, applies nothing) and the `status` and `migrate` commands of `ap_remote.py` against a scratch database. No application bug was found.
+
+**Round trips on the customer path** (each one is a trip to the database pooler on the live site):
+
+| Route | Before | After |
+|---|---|---|
+| new order | 3 | 1 |
+| register a file (upload intent) | 3 | 1 |
+| quote | 5 | 2 (pricing runs in Python between the read and the write) |
+| submit | 3 | 1 with migration 0019, 2 without |
+
+- How: the limiter, the secret check and the work are one SQL statement (a `CASE`, evaluated in order), in `main.py` (`in_one_trip`, `limit_bucket`). Each route keeps the old step-by-step path and uses it when the combined statement is refused as a whole (for example a broken limiter), so "a broken limiter never stops a customer" still holds.
+- **Migration 0019** (`0019_submit_answers_with_payment.sql`): `ap.submit_order` is the 0018 text plus the payment's mode, status and amount in its "ok" answers. Touches no data. The API works with or without it (a test puts the 0018 function back and submit still answers correctly in 2 trips), so the order "site first, then database" holds.
+- Counted by wrapping the database connection in `apps/api/tests/test_round_trips.py` (10 tests, pins the counts so they cannot grow back; also checks the order of refusals, that a wrong secret still gets 404 before any other answer, that a refused limit creates nothing, idempotent submit, 8 customers at once without deadlock).
+- Sub-agent's result: `pytest -q -p no:cacheprovider` 301 passed. `contracts/openapi.json` unchanged after `scripts/export_openapi.py`; the TypeScript client needs no regeneration.
+
+**Behaviour differences to know before deploying (not defects, but new):**
+1. A lost connection, deadlock or statement timeout inside a combined statement answers 503 "try again". Before, a failure in the limiter step alone was skipped.
+2. The limiter's counter row stays locked for the whole statement (a few milliseconds), so requests sharing a counter (one shop's new orders, one address's uploads) queue behind each other. Lock order is the same everywhere; the concurrency test passes; **not load-tested** (`e2e/load_test.py` was not re-run).
+3. The quote reads the price list and the page counts at one instant instead of in two statements; `create_quote` re-checks both.
+4. The quote statement uses `WITH ... AS MATERIALIZED` (PostgreSQL 12 or newer). **The live PostgreSQL version was not checked**; on an older server quote would fall back to the old path and log "combined statement failed".
+5. The limit tests can fail if a limiter window boundary (10 minutes or 1 hour) falls inside a test, as the older limiter test already could.
+
+**Not measured:** latency. Only statement counts; the gain on the live pooler is inferred.
+
+**Finalize (not changed), sub-agent's findings:** the server must download every byte of an upload to compute the SHA-256 the shop app later checks and to validate the PDF, so the download cannot be avoided; the read is already bounded by the declared size. Proposals not done: (a) `SupabaseStorage.read` briefly holds about three copies of the file (about 75 MB for 25 MiB), could be one, untestable without the live store; (b) finalize makes 3 database trips and could make 2 the same way, no migration needed.
