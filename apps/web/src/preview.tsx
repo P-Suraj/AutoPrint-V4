@@ -13,6 +13,28 @@ async function loadPdfjs() {
   return pdfjs;
 }
 
+// On a slow connection the reader (about 120 KB) and its worker (about 410 KB) take longer to arrive than the customer
+// takes to pick a file. So the shop page asks for both once it has nothing else to do: the first screen is already
+// shown and usable by then, and the preview no longer starts its download from nothing.
+let warmed = false;
+export function warmPdfReader(): void {
+  if (warmed) return;
+  warmed = true;
+  // the worker is only put in the browser's cache here (it starts when a file is opened); the reader itself is loaded
+  fetch(workerUrl).then((r) => r.blob()).catch(() => undefined);
+  loadPdfjs().catch(() => { warmed = false; });
+}
+/** Warms the reader when the page is idle. Someone who asked their browser to save data pays for it only on touching the file button. */
+export function warmPdfReaderWhenIdle(): () => void {
+  if ((navigator as { connection?: { saveData?: boolean } }).connection?.saveData) return () => undefined;
+  if (typeof window.requestIdleCallback === "function") {
+    const id = window.requestIdleCallback(warmPdfReader, { timeout: 3000 });
+    return () => window.cancelIdleCallback(id);
+  }
+  const id = window.setTimeout(warmPdfReader, 1200);
+  return () => window.clearTimeout(id);
+}
+
 /**
  * What this browser can tell about the file before it is uploaded.
  * "unknown" means the reader itself could not run here (old browser, script not loaded): that says nothing about
@@ -28,7 +50,12 @@ export function classifyPdfError(e: unknown): Exclude<PdfCheck, { kind: "ok" }> 
   return { kind: "unknown" };
 }
 
-export async function inspectPdf(file: File): Promise<PdfCheck> {
+// What the preview already found out about a file, so Continue does not open the same file a second time.
+const seen = new WeakMap<File, PdfCheck>();
+/** How long Continue waits for this check. The preview is a courtesy: on a slow connection it must not hold the order up. */
+export const INSPECT_WAIT_MS = 3000;
+
+async function readPdf(file: File): Promise<PdfCheck> {
   try {
     const pdfjs = await loadPdfjs();
     const doc = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
@@ -36,6 +63,15 @@ export async function inspectPdf(file: File): Promise<PdfCheck> {
     await doc.destroy();
     return pages >= 1 ? { kind: "ok", pages } : { kind: "invalid" };
   } catch (e) { return classifyPdfError(e); }
+}
+
+/** Answers "unknown" when the reader has not arrived in time: the upload then goes ahead and the server gives the answer. */
+export async function inspectPdf(file: File, waitMs = INSPECT_WAIT_MS): Promise<PdfCheck> {
+  const known = seen.get(file);
+  if (known) return known;
+  let timer: number | undefined;
+  const late = new Promise<PdfCheck>((resolve) => { timer = window.setTimeout(() => resolve({ kind: "unknown" }), waitMs); });
+  try { return await Promise.race([readPdf(file), late]); } finally { window.clearTimeout(timer); }
 }
 
 /** What the customer is told about a file that cannot be printed. One wording, wherever it is found out. */
@@ -60,10 +96,13 @@ export function PdfPreview({ file, onProblem }: { file: File; onProblem?: (kind:
     setFailed(null); setDoc(null);            // a new file starts clean: the last file's failure says nothing about this one
     Promise.all([loadPdfjs(), file.arrayBuffer()]).then(([pdfjs, buf]) => pdfjs.getDocument({ data: new Uint8Array(buf) }).promise).then((d) => {
       loaded = d;
+      seen.set(file, d.numPages >= 1 ? { kind: "ok", pages: d.numPages } : { kind: "invalid" });
       if (alive) { setDoc(d); setPage(1); } else d.destroy();
     }).catch((e) => {
       if (!alive) return;
-      const kind = classifyPdfError(e).kind;
+      const found = classifyPdfError(e);
+      const kind = found.kind;
+      if (kind !== "unknown") seen.set(file, found);
       setFailed(kind);
       if (kind === "encrypted" || kind === "invalid") told.current?.(kind);
     });

@@ -8,8 +8,9 @@
   --ease: cubic-bezier(.22, .61, .36, 1); --t-fast: .14s; --t: .28s; --t-slow: .5s;
 }
 * { box-sizing: border-box; }
-/* the price bar is pinned to the bottom: a field the browser scrolls into view must stop above it */
-html { -webkit-text-size-adjust: 100%; scroll-padding-bottom: 170px; }
+/* the price bar is pinned to the bottom: a field or a message the browser scrolls into view must stop above it
+   (the bar is tallest, about 215px, when it shows the exact price and the Send button) */
+html { -webkit-text-size-adjust: 100%; scroll-padding-bottom: 230px; }
 body {
   margin: 0; font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink);
   background: var(--bg); min-height: 100vh;
@@ -164,12 +165,14 @@ main.with-bar { padding-bottom: 0; }
 .job .status { font-size: 1.15rem; font-weight: 700; line-height: 1.35; }
 .job .doc { color: var(--muted); font-weight: 500; font-size: .92rem; max-width: 100%; }
 .job.bad .status { color: var(--err); }
+.job.hold .status { color: var(--warn); }
 .job.off .status { color: var(--muted); }
 .art { position: relative; display: grid; place-items: center; width: 76px; height: 76px; border-radius: 50%; color: var(--brand); background: var(--brand-soft); flex: none; }
 .art.small { width: 56px; height: 56px; }
 .art.wait::after { content: ""; position: absolute; inset: -6px; border-radius: 50%; border: 2px solid var(--brand); opacity: 0; animation: ring 2.6s var(--ease) infinite; }
 .art.done { color: #fff; background: var(--ok); animation: pop var(--t-slow) var(--ease) both; box-shadow: 0 0 0 8px var(--ok-soft); }
-.art.bad { color: var(--warn); background: var(--warn-soft); }
+.art.bad { color: var(--err); background: var(--err-soft); }
+.art.hold { color: var(--warn); background: var(--warn-soft); }
 .art.off { color: var(--muted); background: #eef1f6; }
 .art .sheet { position: absolute; left: 50%; top: 54%; width: 16px; height: 16px; margin-left: -8px; background: #fff; border: solid var(--brand); border-width: 0 1.5px 1.5px; border-radius: 0 0 2px 2px; transform: scaleY(0); transform-origin: top; }
 .art.printing .sheet { animation: paper 2s var(--ease) infinite; }
@@ -191,13 +194,14 @@ main.with-bar { padding-bottom: 0; }
 .shop-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
 .shop-go { justify-content: flex-start; text-align: left; padding: 12px 14px; min-height: 64px; box-shadow: var(--shadow); color: var(--brand); }
 .shop-go > span:nth-child(2) { display: grid; flex: 1; min-width: 0; color: var(--ink); }
+.shop-go strong { line-height: 1.35; }
 .shop-go small { color: var(--muted); font-weight: 500; font-size: .8rem; }
 .found { display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--ok-ink); }
 .lookup { min-height: 1.5rem; }
 /* the way back to an order that was sent from this phone */
 .order-row { display: flex; gap: 8px; }
 .order-go { flex: 1; min-width: 0; }
-.order-go strong { font-size: .95rem; line-height: 1.35; }
+.order-go strong { font-size: .95rem; }
 .order-code { flex: none; padding: 8px 10px 8px 12px; border-radius: 10px; font-weight: 800; font-size: 1.1rem; color: var(--brand); background: var(--brand-soft); }
 .order-go.quiet .order-code { color: var(--muted); background: #eef1f6; }
 

@@ -10,7 +10,7 @@ const SLOW = { offline: false, latency: 400, downloadThroughput: (400 * 1024) / 
 
 /** Records layout shifts and long tasks from the first moment of the page. */
 const watch = () => {
-  const w = window as unknown as { __m: { cls: number; shifts: string[]; long: number[] } };
+  const w = window as unknown as { __m: { cls: number; shifts: string[]; long: string[] } };
   w.__m = { cls: 0, shifts: [], long: [] };
   new PerformanceObserver((list) => {
     for (const e of list.getEntries() as (PerformanceEntry & { value: number; hadRecentInput: boolean; sources?: { node?: Node }[] })[]) {
@@ -19,10 +19,10 @@ const watch = () => {
       w.__m.shifts.push(`${e.value.toFixed(4)} at ${Math.round(e.startTime)} ms: ${(e.sources ?? []).map((s) => (s.node instanceof Element ? `${s.node.tagName.toLowerCase()}.${s.node.className}` : "?")).join(", ")}`);
     }
   }).observe({ type: "layout-shift", buffered: true });
-  new PerformanceObserver((list) => { for (const e of list.getEntries()) w.__m.long.push(Math.round(e.duration)); }).observe({ type: "longtask", buffered: true });
+  new PerformanceObserver((list) => { for (const e of list.getEntries()) w.__m.long.push(`${Math.round(e.duration)} ms at ${Math.round(e.startTime)}`); }).observe({ type: "longtask", buffered: true });
 };
 const read = (page: Page) => page.evaluate(() => {
-  const m = (window as unknown as { __m: { cls: number; shifts: string[]; long: number[] } }).__m;
+  const m = (window as unknown as { __m: { cls: number; shifts: string[]; long: string[] } }).__m;
   const paint = (name: string) => Math.round(performance.getEntriesByName(name)[0]?.startTime ?? -1);
   return { firstPaint: paint("first-paint"), firstContentfulPaint: paint("first-contentful-paint"), layoutShift: Number(m.cls.toFixed(4)), shifts: m.shifts, longTasks: m.long };
 });
@@ -40,17 +40,21 @@ async function open(browser: Browser, slow: boolean) {
   return { ctx, page, sizes };
 }
 const kb = (n: number) => `${(n / 1024).toFixed(1)} KB`;
-const total = (sizes: Map<string, number>) => kb([...sizes.values()].reduce((a, b) => a + b, 0));
+// The PDF reader is not part of the first view: the shop page fetches it in the background once the screen is usable.
+const later = (url: string) => url.startsWith("/assets/pdf");
+const total = (sizes: Map<string, number>, which: (url: string) => boolean) => kb([...sizes].filter(([url]) => which(url)).reduce((a, [, n]) => a + n, 0));
 
 for (const [name, path, ready] of [["home", "/", "Print from your phone"], ["shop page", `/s/${SHOP}`, "Choose a PDF"]] as const) {
   test(`first view of the ${name}`, async ({ browser }) => {
     const fast = await open(browser, false);
     await fast.page.goto(path);
     await fast.page.getByText(ready).waitFor();
-    await fast.page.waitForTimeout(2500);
+    await fast.page.waitForTimeout(4500);
     console.log(`\n== ${name} (${path})`);
-    console.log("downloaded on first view:", total(fast.sizes));
-    for (const [url, n] of fast.sizes) console.log(`   ${kb(n).padStart(9)}  ${url}`);
+    console.log("downloaded on first view:", total(fast.sizes, (u) => !later(u)));
+    for (const [url, n] of fast.sizes) if (!later(url)) console.log(`   ${kb(n).padStart(9)}  ${url}`);
+    console.log("fetched in the background after the screen is usable:", total(fast.sizes, later));
+    for (const [url, n] of fast.sizes) if (later(url)) console.log(`   ${kb(n).padStart(9)}  ${url}`);
     console.log("on a fast connection:", JSON.stringify(await read(fast.page)));
     await fast.ctx.close();
 
@@ -59,7 +63,7 @@ for (const [name, path, ready] of [["home", "/", "Print from your phone"], ["sho
     await slow.page.goto(path, { waitUntil: "commit" });
     await slow.page.getByText(ready).waitFor({ timeout: 120_000 });
     const usable = Date.now() - t0;
-    await slow.page.waitForTimeout(4000);
+    await slow.page.waitForTimeout(16_000);          // long enough for the background fetch of the PDF reader to arrive and run
     const m = await read(slow.page);
     console.log(`on a slow phone: first paint ${m.firstPaint} ms, first content ${m.firstContentfulPaint} ms, usable ${usable} ms, layout shift ${m.layoutShift}, long tasks ${JSON.stringify(m.longTasks)}`);
     for (const s of m.shifts) console.log("   shift", s);
@@ -68,15 +72,17 @@ for (const [name, path, ready] of [["home", "/", "Print from your phone"], ["sho
 }
 
 test("the whole customer flow: layout shift, long tasks and what choosing a file downloads", async ({ browser }) => {
-  for (const slow of [false, true]) {
+  // `pause`: how long the customer takes to pick the file after the screen appears (the background fetch runs meanwhile)
+  // `eager`: Continue is pressed without waiting for the preview, as an impatient customer would
+  for (const [slow, pause, eager] of [[false, 0, false], [true, 0, false], [true, 0, true], [true, 6000, false], [true, 15_000, false]] as const) {
     const { ctx, page, sizes } = await open(browser, slow);
     await page.goto(`/s/${SHOP}`);
     await page.getByText("Choose a PDF").waitFor({ timeout: 120_000 });
-    const before = new Set(sizes.keys());
+    await page.waitForTimeout(pause);
     let t0 = Date.now();
     await page.locator('input[type="file"]').setInputFiles(PDF);
-    await page.locator(".preview canvas.ready").waitFor({ timeout: 180_000 });
-    const preview = Date.now() - t0;
+    if (!eager) await page.locator(".preview canvas.ready").waitFor({ timeout: 180_000 });
+    const preview = eager ? "not waited for; Continue pressed at once" : `drawn ${Date.now() - t0} ms after choosing`;
     t0 = Date.now();
     await page.getByRole("button", { name: "Continue" }).click();
     await expect(page.getByText("3 pages")).toBeVisible({ timeout: 120_000 });
@@ -93,11 +99,11 @@ test("the whole customer flow: layout shift, long tasks and what choosing a file
     await page.getByText("Waiting for the shop to approve your print.").waitFor({ timeout: 60_000 });
     const sent = Date.now() - t0;
     await page.waitForTimeout(1500);
-    console.log(`\n== customer flow, ${slow ? "slow phone" : "fast connection"}`);
-    console.log(`preview drawn ${preview} ms after choosing; upload and check ${uploaded} ms; status shown ${sent} ms after Send`);
+    console.log(`\n== customer flow, ${slow ? "slow phone" : "fast connection"}, file chosen ${pause ? `${pause / 1000} s after` : "the moment"} the screen appears`);
+    console.log(`preview ${preview}; upload and check ${uploaded} ms; status shown ${sent} ms after Send`);
     console.log(`layout shift ${flow.layoutShift}, long tasks ${JSON.stringify(flow.longTasks)}`);
     for (const s of flow.shifts) console.log("   shift", s);
-    if (!slow) for (const [url, n] of sizes) if (!before.has(url) && !url.startsWith("/v1")) console.log(`   after choosing a file: ${kb(n).padStart(9)}  ${url}`);
+    if (!slow) for (const [url, n] of sizes) if (later(url)) console.log(`   for the preview: ${kb(n).padStart(9)}  ${url}`);
     console.log("status page:", JSON.stringify(await read(page)));
     await ctx.close();
   }

@@ -10,7 +10,10 @@ import { Icon, TopBar } from "../ui";
 const FINAL = new Set(["closed", "cancelled", "expired"]);
 // How often the server is asked. Quick while something is about to happen; slower once the customer has been
 // waiting for the shop for a while (an approval can take many minutes and each question costs a server call).
+// Quickest between the shop's approval and the result: that part lasts a few seconds, so it is a handful of extra
+// questions per order, and it is when the customer is standing at the counter watching the page.
 export const POLL_MS = 4000;
+export const POLL_FAST_MS = 2000;
 export const POLL_SLOW_MS = 8000;
 export const POLL_SLOW_AFTER_MS = 120_000;
 export const RETRY_MAX_MS = 30_000;
@@ -20,9 +23,11 @@ type JobStatus = Schemas["OrderJobView"]["status"];
 // How many steps of the happy path are behind a job. Other states (declined, cancelled, a problem) have no place on the track.
 const STEPS_DONE: Partial<Record<JobStatus, number>> = { awaiting_approval: 1, approved: 2, printing: 2, completed: 4 };
 const TRACK = ["Sent", "Approved", "Printer", "Collect"];
-const TONE: Record<JobStatus, "wait" | "go" | "done" | "bad" | "off"> = {
+// "hold" is a print the shop is looking at (nothing has gone wrong yet): amber. "bad" is one that could not be made: red.
+// The mark and the words of a card always share the one colour of its tone.
+const TONE: Record<JobStatus, "wait" | "go" | "done" | "hold" | "bad" | "off"> = {
   awaiting_approval: "wait", approved: "go", printing: "go", completed: "done",
-  failed: "bad", needs_attention: "bad", rejected: "off", cancelled: "off", expired: "off",
+  failed: "bad", needs_attention: "hold", rejected: "off", cancelled: "off", expired: "off",
 };
 
 function StatusArt({ status }: { status: JobStatus }) {
@@ -32,7 +37,7 @@ function StatusArt({ status }: { status: JobStatus }) {
       {status === "completed" ? <Icon.check size={34} />
         : status === "awaiting_approval" ? <Icon.clock size={32} />
         : status === "approved" || status === "printing" ? <><Icon.printer size={32} /><i className="sheet" /></>
-        : tone === "bad" ? <Icon.alert size={32} /> : <Icon.x size={30} />}
+        : tone === "bad" || tone === "hold" ? <Icon.alert size={32} /> : <Icon.x size={30} />}
     </span>
   );
 }
@@ -96,7 +101,8 @@ export default function OrderPage() {
       finished.current = FINAL.has(o.status);
       if (!finished.current) {
         const waitingForShop = o.jobs.every((j) => j.status === "awaiting_approval");
-        next(waitingForShop && Date.now() - started.current > POLL_SLOW_AFTER_MS ? POLL_SLOW_MS : POLL_MS);
+        const atThePrinter = o.jobs.some((j) => j.status === "approved" || j.status === "printing");
+        next(atThePrinter ? POLL_FAST_MS : waitingForShop && Date.now() - started.current > POLL_SLOW_AFTER_MS ? POLL_SLOW_MS : POLL_MS);
       }
     } catch (e) {
       if (mine !== run.current) return;

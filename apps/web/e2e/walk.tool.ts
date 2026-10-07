@@ -95,6 +95,13 @@ async function phone(browser: Browser, size: { width: number; height: number }) 
   await page.locator(".total").waitFor(); await settle(page);
   await shot(page, "18-price-and-send-screen");
   await shot(page, "19-price-and-send", { full: true });
+  // a failed Send while the customer is looking at the top of the page: the message must come into view above the bar
+  await page.route("**/v1/orders/*/submit", (r) => r.abort());
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.getByRole("button", { name: "Send to shop" }).click();
+  await page.getByRole("alert").waitFor(); await settle(page);
+  await shot(page, "19b-send-failed-screen");
+  await page.unroute("**/v1/orders/*/submit");
   await page.getByRole("button", { name: "Send to shop" }).click();
   await page.locator(".job").waitFor();
   await shot(page, "20-status-instant");

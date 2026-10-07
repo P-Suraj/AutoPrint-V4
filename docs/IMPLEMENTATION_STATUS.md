@@ -340,3 +340,40 @@ Done by a backend sub-agent; its report is folded in here. The lead read the who
 **Not measured:** latency. Only statement counts; the gain on the live pooler is inferred.
 
 **Finalize (not changed), sub-agent's findings:** the server must download every byte of an upload to compute the SHA-256 the shop app later checks and to validate the PDF, so the download cannot be avoided; the read is already bounded by the declared size. Proposals not done: (a) `SupabaseStorage.read` briefly holds about three copies of the file (about 75 MB for 25 MiB), could be one, untestable without the live store; (b) finalize makes 3 database trips and could make 2 the same way, no migration needed.
+
+## Website: verified after the day's edits; preview no longer holds the customer up (7 October 2026, local only)
+
+Done by a website sub-agent; its report is folded in here. The lead did not repeat its runs. **Not deployed.**
+
+**Verified by the sub-agent on the final code, once each:** `npx tsc --noEmit` clean; `npx vitest run` 73 passed; `npm run build` passed; browser suite 17 of 17 in Edge (Pixel 7 profile) and 17 of 17 in WebKit (iPhone 13 profile); the walk at 320, 360 and 412 px: "no layout findings" over 42 screens, now including the shop dashboard (the runner makes a throwaway dashboard key in the scratch database for the walk). All 41 pictures of the first walk were looked at; after the fixes, the 8 affected ones.
+
+**Changes:**
+- **The preview no longer delays Continue.** Before: Continue was never disabled, but pressing it ran a file check that waited for the same pdf.js download as the preview, so "Checking your file" could sit for about 12 s on a slow phone. Now Continue waits at most 3 s for that check and then uploads (the server checks every file anyway); if the preview already opened the file its result is reused.
+- **pdf.js and its worker are fetched in the background on the shop page**, when the browser is idle after the first screen is usable (with data-saver on: only when the file button is touched). First-view bytes are unchanged (about 82 KB). **Cost to know about: every visitor to a shop page now downloads about 530 KB more (gzip) in the background even if they never choose a file.** The home page fetches nothing extra.
+- The status page asks every 2 s while a job is approved or printing (lead's edit, unit-tested).
+- The shop dashboard calls a computer offline after 45 s, the same as the customer page (was 60 s).
+- Visual fixes: an error message below the fold at 320 x 568, or behind the pinned price bar, is now scrolled into view; the settings no longer jump about 40 px while a page range is being typed; "needs attention" is amber throughout and "failed" red throughout (each had a red headline with an amber icon); line spacing of the "Print at" row on the home page.
+- Tools: the perf tool reports first-view bytes separately from the background fetch and has cases for "file chosen after 6 s / 15 s" and "Continue pressed at once"; the walk has a "send failed" screen.
+
+**Load numbers after the changes** (production build under `vite preview`, Edge, 360 px, single runs; slow = 400 ms delay, 400 kbit/s, processor 4 times slower):
+
+| | Fast | Slow |
+|---|---|---|
+| First view downloaded | home 81.1 KB, shop 81.9 KB | |
+| Usable | | home 3.0 to 3.1 s; shop 3.7 to 4.1 s (3.4 to 3.9 s before; the sub-agent reads the spread as noise, not proven) |
+| Preview drawn, file chosen at once | about 250 ms | 11.0 to 11.4 s (11.9 s before) |
+| Preview drawn, file chosen 6 s after the screen | | 5.1 to 5.6 s |
+| Preview drawn, file chosen 15 s after the screen | | 1.0 s |
+| Upload and check after Continue | about 300 ms | 2.3 s; 5.6 s when Continue is pressed without waiting for the preview |
+| Status shown after Send | 135 ms | 1.5 s |
+| Layout shift | 0 | 0.0003 to 0.0005 (spinner moves a pixel as the percentage text changes width) |
+
+Correction to the earlier table of this day: choosing a file always cost about 530 KB (pdf.js 121 KB plus its worker 409 KB, gzip), not 121 KB; the tool could not see the worker's own download.
+
+**Left open:**
+- A slow link cannot move 530 KB in under about 11 s, so a customer who picks a file within a second or two of opening the page still waits for the preview (but can continue). Shrinking the worker (modern pdf.js build, or a lighter page counter) was not attempted.
+- pdf.js starting in the background is one task of 160 to 270 ms on the slow profile; a tap in that window is answered that much later.
+- At 320 px with a price like Rs 3,00,000 the word "About" wraps above the amount (readable).
+- The dashboard's 45 s is a copy of a server setting, and it compares the server's last-seen time with the browser's clock, so a wrong clock gives a wrong answer. The proper fix is an `online` field per computer from `/v1/shop/devices` (needs the API and the contract). Not done.
+
+**Not verified:** real phones; the live site; whether Vercel sends the `.mjs` worker compressed and with cache headers that let the background fetch be reused (check with `curl -sI -H "Accept-Encoding: br, gzip" https://autoprint-v4.vercel.app/assets/pdf.worker.min-<hash>.mjs` after deploying); the case where a locked or broken PDF is uploaded because the 3 s cap ran out and the server then refuses it (no test exercises it); the data-saver branch; the background fetch and the 3 s cap in WebKit beyond the 17 functional tests; dashboard screens at 320 px; the 45 s threshold against a real shop computer.
