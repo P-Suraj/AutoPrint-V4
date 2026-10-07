@@ -421,3 +421,12 @@ A V3 `F:\AutoPrint\AutoPrint.exe` was running on the PC throughout and was left 
 - **Windows app 4.0.4** (decision G-3 and the colour test): the reminder comes three times 2 minutes apart, then every 10 minutes (test: minutes 2, 4, 6, 16, 26, 36, 46, 56 for one unanswered request); the colour test page has a red, a green and a blue square and its result line asks to check them. Verified once each on the final code: `dotnet build apps/desktop -c Release` 0 warnings; `dotnet test ... --filter "FullyQualifiedName!~LiveE2ETests"` with the virtual printer variables set: 177 passed, 0 skipped; `AutoPrint.exe --selftest-ui <folder> live`: exit 0, 72 PASS, 0 FAIL. Installer `dist\AutoPrintSetup-4.0.4.exe`, 59.0 MB, SHA-256 `f621c70acbb61c69d8b7f2ed6fa77f0b93e07b4a47764233610f2ea50ae1e649`. Not installed, not signed, not scanned; the coloured squares were not looked at on paper or on a screen (the page's content is checked by a test, and a colour test page went through the real print program to the virtual printer in the test run).
 - `dist\AutoPrintSetup-4.0.3.exe` is superseded; do not hand it out.
 - Decisions taken by the model under the founder's G-2 are G-3 to G-8 in `docs/DECISIONS.md`, each with its reason. Payments were deliberately not started (G-7).
+
+## Live database updated (7 October 2026, run by the founder)
+
+Output pasted by the founder into the session, not run by the model:
+- `ap_remote.py status` before: site "live (HTTP 200)", database "ready (HTTP 200)", 9 applied (0001 to 0009), 10 pending (0010 to 0019).
+- `ap_remote.py migrate`: "Applied now: 10", 0010 to 0019 in order, "The database now has 19 updates (latest: 0019_submit_answers_with_payment)".
+- `ap_remote.py status` after: 19 applied, 0010 to 0019 all stamped 2026-10-07 04:05 (UTC), "Nothing pending: the database matches the code that is live."
+
+This is also the first live run of the `status` and `migrate` commands, and it shows the new API ran against the 0009 database for a while without the site or its database check going down. **Still not checked live:** an order from start to finish on the new code and database (`e2e/run_live_e2e.py` and one PDF from a real phone), and the backfill of 0015 (that already-deleted documents now read "deleted file").

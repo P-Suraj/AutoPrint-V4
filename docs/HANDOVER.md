@@ -80,14 +80,14 @@ Migration 0009 is applied live (6 Oct 2026); email sign-in stays inactive until 
 (Sections 2 to 5 above describe 6 October and are partly out of date: test counts, installer version and "next steps" are superseded by this section. Evidence for everything here is in `docs/IMPLEMENTATION_STATUS.md`, the sections dated 7 October.)
 
 - **`main` is deployed (7 October, merge commit `0603216` and later):** security-review fixes, customer routes in 1 or 2 database round trips, the website changes, and the source of Windows app 4.0.4. Seen live: only that the new `/v1/internal/status` route exists. **Not checked live: anything else.**
-- **Live database: unknown which migrations are applied** (0001 to 0009 certainly; 0010 to 0019 unless the founder has run them). The Claude session is refused every call that uses the maintenance token, so only the founder can look and apply.
+- **Live database: all 19 migrations applied** (0010 to 0019 by the founder on 7 October 2026 at 04:05 UTC with `ap_remote.py migrate`; `status` afterwards: "Nothing pending"). The Claude session is refused every call that uses the maintenance token, so only the founder can run `status` and `migrate`.
 - **Windows app 4.0.4:** `dist\AutoPrintSetup-4.0.4.exe` (SHA-256 next to it and in the status file). Not yet installed anywhere. The founder's installed copy is older and was set to Microsoft Print to PDF.
 - The founder gave the model freedom to decide features (G-2), with "do not over-engineer". Decisions taken under it are G-3 to G-8 in `docs/DECISIONS.md`. **Payments are deliberately not started (G-7).**
 - The non-payment software build is complete as far as it can be without a real printer, a real phone and the founder's live checks. What remains is checking, not building.
 
 ### Next steps, in order (all for the founder; `PY` = `apps\api\.venv\Scripts\python.exe`)
-1. `PY scripts\ap_remote.py status` (shows site health and which database updates are pending).
-2. `PY scripts\ap_remote.py migrate` (applies them; 0015 permanently blanks the names and checksums of files that were already deleted). Then `status` again: it must say "Nothing pending".
+1. DONE 7 October: `PY scripts\ap_remote.py status`.
+2. DONE 7 October: `PY scripts\ap_remote.py migrate` (10 applied, then "Nothing pending").
 3. `PY e2e\run_live_e2e.py` (whole chain on the live site with the virtual printer), then send one PDF from a real phone at `https://autoprint-v4.vercel.app/s/TST001`.
 4. Install `dist\AutoPrintSetup-4.0.4.exe` over the installed copy, open Settings, **choose the real printer**, press "Print a test page" (and "Test the colour printer" if there is one), then follow `docs/TEST_THE_WINDOWS_APP.md`.
 5. Add the GitHub secret `AUTOPRINT_MAINTENANCE_TOKEN` (the cleanup workflow fails until then); in Supabase set the `print-documents` bucket to 25 MB and `application/pdf` only.
