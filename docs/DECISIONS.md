@@ -88,3 +88,19 @@ Decisions taken under G-2 are listed below as they are made, each marked "taken 
 | G-6 | Requests already waiting when the app starts stay silent at first; the reminder follows 2 minutes later. Reason: the shopkeeper has just opened the app and is looking at them | Taken by the model under G-2, 2026-10-07. No change |
 | G-7 | Online payments (Phase 9) are not built now, not even the AutoPrint side against a pretend FinFlow. Reason: FinFlow cannot take a payment today, has no free always-on host (P-5 open, O-4 says free only), and each shop would need its own provider account (P-1); code written against a pretend service that cannot go live would be guesswork to maintain. The pilot runs on pay-at-counter, which is built. Revisit when a pilot shop asks for it. This follows the founder's own order (payments after the rest) and his "do not over-engineer" | Taken by the model under G-2, 2026-10-07 |
 | G-8 | Left as they are, on purpose: the Settings window scrolls on a 1366 x 768 screen (Save stays in view); the shop dashboard's "online" uses a 45 s rule copied from the server; finalize makes 3 database trips. Each works; each fix is more code than the problem is worth before a pilot shows it matters | Taken by the model under G-2, 2026-10-07 |
+
+## Founder feedback after the walkthrough (7 October 2026, evening)
+
+The founder was walked through the software part by part and asked for the following. Each is his decision; how it was built is the model's choice under G-2 and can be overruled.
+
+| ID | Subject | Status |
+|---|---|---|
+| H-1 | The shopkeeper sets the shop's prices and edits the shop's name from the dashboard (before, only the founder could, with the maintenance token) | DECIDED by the founder 2026-10-07. Built: migration 0020, `GET/POST /v1/shop/settings`, dashboard panel |
+| H-2 | A customer can send several documents in one order, each with its own print settings. This replaces O-9 and D-15's "the screen allows one PDF" (the database allowed many from the start) | DECIDED by the founder 2026-10-07. Built in the customer page; at most 20 files per order (the existing server limit) |
+| H-3 | The Windows app can search the waiting requests by the order code the customer says at the counter | DECIDED by the founder 2026-10-07. Built in 4.0.5: one search box for both tabs |
+| H-4 | A shop without a colour printer can say so; its customers are told and cannot choose colour | DECIDED by the founder 2026-10-07. Built: `ap.shops.color_enabled`, set on the dashboard; the customer page shows "black & white only" and the server refuses a colour quote |
+| H-5 | The shopkeeper downloads the Windows installer from the dashboard | DECIDED by the founder 2026-10-07. Built as a link to the newest GitHub release of this repository (free; the installer is 59 MB, over Supabase's free 50 MB per-file limit). The founder must publish the release |
+| H-6 | "Email me a sign-in link" does not work yet. Leave it; the founder hands out private links for now | DECIDED by the founder 2026-10-07. Nothing changed |
+| G-9 | Colour on or off (H-4) is set in ONE place, the dashboard, next to the prices, and not also in the Windows app's printer choice as the founder suggested as an alternative. Reason: two switches for one fact can disagree, and the dashboard is where the colour prices are | Taken by the model under G-2, 2026-10-07 |
+| G-10 | The price editor shows one price per printed side for each of the four kinds, plus optional bulk prices ("from N sides"). It writes the same slab format the server always had | Taken by the model under G-2, 2026-10-07 |
+| G-11 | With several files in one order the shop computer still shows one card per file (each is approved and printed by itself), and each card says how many files the order has and the order's total to collect | Taken by the model under G-2, 2026-10-07 |

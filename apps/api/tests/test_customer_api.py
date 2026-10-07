@@ -26,7 +26,8 @@ def test_health_and_readiness(client):
 def test_shop_lookup_is_case_insensitive_and_reports_agent_status(client, shop, raw_db):
     r = client.get(f"/v1/shops/{shop.code.lower()}")
     assert r.status_code == 200
-    assert r.json() == {"code": shop.code, "name": "Test Shop", "accepting_orders": True, "agent_online": False}
+    assert r.json() == {"code": shop.code, "name": "Test Shop", "accepting_orders": True, "agent_online": False,
+                        "color_available": True}
     device = shop.device()                                     # enrollment alone is not "online"
     assert client.get(f"/v1/shops/{shop.code}").json()["agent_online"] is False
     raw_db.run("UPDATE ap.devices SET last_seen_at = now() WHERE id = %s", (device,))

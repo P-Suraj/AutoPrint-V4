@@ -25,7 +25,7 @@ public sealed record PrintOptions(int Copies, bool Color, bool Duplex, string? P
 public sealed record JobSummary(
     Guid JobId, string OrderShortCode, string DocumentName, int PageCount, int Copies, bool Color, bool Duplex,
     string? PageRange, int AmountPaise, JobStatus Status, DateTimeOffset CreatedAt, DateTimeOffset? ApprovalExpiresAt,
-    int AttemptCount);
+    int AttemptCount, int OrderFiles = 1, int? OrderTotalPaise = null);
 
 public sealed record JobListResponse(string ShopCode, string ShopName, IReadOnlyList<JobSummary> Jobs, int ContractVersion);
 

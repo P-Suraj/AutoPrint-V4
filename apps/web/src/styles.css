@@ -120,6 +120,21 @@ fieldset:disabled { opacity: .6; }
 .file-badge { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 12px; color: var(--brand); background: var(--brand-soft); flex: none; }
 .tick { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; color: #fff; background: var(--ok); flex: none; animation: pop var(--t) var(--ease) both; }
 .filecard { grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 14px; }
+/* several files in one order: the list of chosen files, then one card per uploaded file (one open at a time) */
+.picked { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.picked li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); font-weight: 600; }
+.picked small { color: var(--muted); font-weight: 500; }
+.doc { padding: 14px; }
+.doc .filecard { display: grid; padding: 0; width: 100%; }
+.doc .filecard > div { display: grid; min-width: 0; }
+button.filecard { border: 0; background: none; min-height: 0; border-radius: 10px; text-align: left; font-weight: inherit; justify-content: initial; }
+.doc-price { white-space: nowrap; font-size: 1.05rem; }
+.doc-options { display: grid; gap: 14px; border: 0; padding: 0; }
+.add-file { position: relative; width: 100%; min-height: 54px; border-style: dashed; border-color: #c7d2fe; color: var(--brand); background: rgba(255, 255, 255, .8); }
+.add-file input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.add-file:focus-within { outline: 3px solid rgba(29, 78, 216, .35); outline-offset: 2px; }
+.add-file.off { color: var(--muted); cursor: default; }
+.add-file.off input { cursor: default; }
 .file-actions { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 4px 12px; }
 .file-actions .peek[open] { flex: 1 0 100%; }
 .file-actions button.link { font-size: .92rem; padding: 4px 0; min-height: 44px; margin-left: auto; }

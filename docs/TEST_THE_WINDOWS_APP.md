@@ -3,7 +3,7 @@
 Use a test shop (`TST001`). Nothing here touches V3. Allow about 15 minutes.
 
 ## What you need
-- `dist\AutoPrintSetup-4.0.4.exe` (about 59 MB). Rebuild with `powershell -ExecutionPolicy Bypass -File apps\desktop\installer\build.ps1 -Version 4.0.4`.
+- `dist\AutoPrintSetup-4.0.5.exe` (about 59 MB; `dist\AutoPrintSetup.exe` is the same file under the fixed name the shop dashboard's download link uses). Rebuild with `powershell -ExecutionPolicy Bypass -File apps\desktop\installer\build.ps1 -Version 4.0.5`.
 - `dist\SHOP_LINK.txt`: your private dashboard link for TST001. Keep it private; anyone with it can manage that shop. Revoke it any time through the founder endpoint (label `founder-test`).
 - A printer. The virtual printer `AutoPrint-Spike-PDF` makes a file, not paper. The Kyocera is the real test but is **not certified yet**: use it only for trial pages.
 
@@ -21,6 +21,13 @@ Use a test shop (`TST001`). Nothing here touches V3. Allow about 15 minutes.
 2. Pick a PDF, choose options, submit.
 3. In the app a card appears (and a tray notification). Press **Preview** to see the pages, then **Approve and print**.
 4. The customer page should move to "printing" and then "Sent to printer".
+
+## What is new in 4.0.5 (7 October)
+These are in `AutoPrintSetup-4.0.5.exe` (SHA-256 `52a9bc6ac062414c42490b7092b2f5305146a0c2d01f87f26db36cf5d71285dc`). Not installed anywhere yet.
+- **Find a request by its code.** The search box is now beside the Requests and Finished tabs and works on both. The customer says their code at the counter; type it and only that order's requests stay on the Requests tab, with their Approve buttons. Part of a file name works too. The number on the Requests tab still counts every open request, not only the ones shown. If nothing open matches, the app says so and points to Finished. Ctrl+F puts the cursor in the box without changing tab. Press the small cross to see everything again.
+- **An order with several files.** A customer can now send several files in one order, each with its own settings. Each file is its own card with the same order code. Under the amount for that file the card says "One of 3 files in this order" and "Order total ₹74", so you collect the right amount. Typing the code shows all the files of that order together. The order total needs database migration 0020; before it is applied, cards look as they did in 4.0.4.
+
+Checked on 7 October: the automatic tests (`dotnet test apps/desktop/tests/AutoPrint.Core.Tests`: 172 passed, 7 skipped, the skipped ones need a real printer) and the app's own pictures with made-up data (`AutoPrint.exe --selftest-ui <folder>`: `27-requests-search`, `28-requests-search-no-match`, `29-order-with-several-files`, looked at in the normal and the smallest window). **Not tried:** typing in the box on a real screen with real requests arriving, a real order with several files from the live site, installing 4.0.5 over 4.0.4, any real printer. Left as it is: a search that is still typed in keeps hiding new requests that do not match it (the tab's number still goes up and the sound still plays).
 
 ## What is new in 4.0.3 and 4.0.4 (7 October)
 These are in `AutoPrintSetup-4.0.4.exe`. 4.0.4 added two things to 4.0.3: the reminder sound comes less often after the third time, and the colour test page has a red, a green and a blue square so you can see that colour really prints.

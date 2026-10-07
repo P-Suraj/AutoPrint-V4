@@ -1,7 +1,8 @@
 # Builds the AutoPrint installer:  powershell -ExecutionPolicy Bypass -File apps\desktop\installer\build.ps1
-# Output: dist\AutoPrintSetup-<version>.exe and dist\AutoPrintSetup-<version>.exe.sha256.txt
+# Output: dist\AutoPrintSetup-<version>.exe and dist\AutoPrintSetup-<version>.exe.sha256.txt, plus a copy named
+# dist\AutoPrintSetup.exe: the fixed name the shop dashboard asks GitHub Releases for in its download link.
 # Needs: .NET 8 SDK, Inno Setup 6 (ISCC.exe), and the portable SumatraPDF 3.6.1 at apps\desktop\src\AutoPrint.Desktop\tools\SumatraPDF.exe
-param([string]$Version = "4.0.4")
+param([string]$Version = "4.0.5")
 $ErrorActionPreference = "Stop"
 if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) { $env:PATH += ";$env:ProgramFiles\dotnet" }
 $root = Resolve-Path (Join-Path $PSScriptRoot "..\..\..")
@@ -42,4 +43,5 @@ if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
 $exe = Join-Path $dist "AutoPrintSetup-$Version.exe"
 $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
 "$hash  AutoPrintSetup-$Version.exe" | Set-Content "$exe.sha256.txt" -Encoding ASCII
+Copy-Item $exe (Join-Path $dist "AutoPrintSetup.exe") -Force
 "{0}  ({1:N1} MB)`nSHA-256: {2}" -f $exe, ((Get-Item $exe).Length / 1MB), $hash

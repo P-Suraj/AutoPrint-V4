@@ -68,6 +68,7 @@ class ShopPublic(Strict):
     name: str
     accepting_orders: bool
     agent_online: bool = Field(description="True when the shop's desktop app has checked in recently")
+    color_available: bool = Field(default=True, description="False when the shop has said it does not print in colour")
 
 
 class Slab(Strict):
@@ -242,6 +243,24 @@ class ShopMe(Strict):
     shop_name: str
 
 
+class ShopSettings(Strict):
+    """What the shopkeeper can change from the dashboard."""
+    shop_code: str
+    shop_name: str
+    color_enabled: bool
+    rate_card_version: Optional[int] = Field(default=None, description="Null when the shop has no price list yet")
+    bw: Optional[RateTable] = None
+    color: Optional[RateTable] = None
+
+
+class ShopSettingsUpdate(Strict):
+    """Every field is optional: what is left out stays as it is. Prices are sent as both tables together."""
+    shop_name: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    color_enabled: Optional[bool] = None
+    bw: Optional[RateTable] = None
+    color: Optional[RateTable] = None
+
+
 class ShopPairLookup(Strict):
     display_name: str
     expired: bool
@@ -291,6 +310,8 @@ class JobSummary(Strict):
     created_at: datetime
     approval_expires_at: Optional[datetime]
     attempt_count: int = Field(description="How many print attempts this job has had; more than 1 means a human retried it")
+    order_files: int = Field(default=1, description="How many files the customer sent in this order")
+    order_total_paise: Optional[int] = Field(default=None, description="What to collect for the whole order")
 
 
 class JobListResponse(Strict):

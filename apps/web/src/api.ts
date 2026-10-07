@@ -105,6 +105,9 @@ export const shopApi = {
   devices: (key: string) => call(() => client.GET("/v1/shop/devices", { params: { header: { "x-shop-key": key } } })),
   revoke: (key: string, id: string) =>
     call(() => client.POST("/v1/shop/devices/{device_id}/revoke", { params: { path: { device_id: id }, header: { "x-shop-key": key } } })),
+  settings: (key: string) => call(() => client.GET("/v1/shop/settings", { params: { header: { "x-shop-key": key } } })),
+  saveSettings: (key: string, body: Schemas["ShopSettingsUpdate"]) =>
+    call(() => client.POST("/v1/shop/settings", { params: { header: { "x-shop-key": key } }, body })),
 };
 export { shopKey };
 

@@ -87,7 +87,7 @@ public partial class MainWindow : Window
         // messages at the top never push the requests off a small window: past a third of its height they scroll
         SizeChanged += (_, a) => BannerArea.MaxHeight = Math.Max(120, a.NewSize.Height * 0.36);
         Activated += (_, _) => { Alerts.Flash(this, on: false); Refresh(); };
-        PreviewKeyDown += (_, e) => { if (e.Key == System.Windows.Input.Key.F && System.Windows.Input.Keyboard.Modifiers == System.Windows.Input.ModifierKeys.Control && QueueView.IsVisible) { TabFinished.IsChecked = true; SearchBox.Focus(); e.Handled = true; } };
+        PreviewKeyDown += (_, e) => { if (e.Key == System.Windows.Input.Key.F && System.Windows.Input.Keyboard.Modifiers == System.Windows.Input.ModifierKeys.Control && QueueView.IsVisible) { SearchBox.Focus(); SearchBox.SelectAll(); e.Handled = true; } };
     }
 
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
@@ -407,6 +407,15 @@ public partial class MainWindow : Window
         var attention = jobs.Where(j => j.Status == JobStatus.NeedsAttention).OrderBy(j => j.CreatedAt).ToList();
         var printing = jobs.Where(j => j.Status is JobStatus.Printing or JobStatus.Approved).OrderBy(j => j.Status == JobStatus.Printing ? 0 : 1).ThenBy(j => j.CreatedAt).ToList();
         var waiting = jobs.Where(j => j.Status == JobStatus.AwaitingApproval).OrderBy(j => j.CreatedAt).ToList();
+        int open = waiting.Count + attention.Count;
+        // the customer says a code at the counter: typing it leaves only that order (every file of it, together)
+        var query = SearchBox.Text.Trim();
+        if (query.Length > 0)
+        {
+            attention = attention.Where(j => JobText.Matches(j, query)).ToList();
+            printing = printing.Where(j => JobText.Matches(j, query)).ToList();
+            waiting = waiting.Where(j => JobText.Matches(j, query)).ToList();
+        }
         var wanted = new List<Wanted>();
         void Section(string key, string title, string colour, List<JobSummary> list)
         {
@@ -419,7 +428,7 @@ public partial class MainWindow : Window
                 var stage = s.Current is { } c && c.JobId == j.JobId ? c.Stage : Stage.Idle;
                 string? caution = j.Status == JobStatus.AwaitingApproval ? Caution(j) : null;
                 var why = _runs.GetValueOrDefault(j.JobId);
-                var sig = $"{j.Status}|{busy}|{_confirmRetry == j.JobId}|{block}|{Offline}|{stage}|{j.DocumentName}|{j.AmountPaise}|{j.AttemptCount}|{j.ApprovalExpiresAt}|{caution}|{why?.Reason}|{why?.Detail}|{(_queueLook.TryGetValue(j.JobId, out var look) ? look : null)}|{_leftByItself.Contains(j.JobId)}|{(_confirmRetry == j.JobId ? _retryStep : null)}";
+                var sig = $"{j.Status}|{busy}|{_confirmRetry == j.JobId}|{block}|{Offline}|{stage}|{j.DocumentName}|{j.AmountPaise}|{j.AttemptCount}|{j.ApprovalExpiresAt}|{caution}|{why?.Reason}|{why?.Detail}|{(_queueLook.TryGetValue(j.JobId, out var look) ? look : null)}|{_leftByItself.Contains(j.JobId)}|{(_confirmRetry == j.JobId ? _retryStep : null)}|{j.OrderFiles}|{j.OrderTotalPaise}";
                 wanted.Add(new(j.JobId.ToString(), sig, () => JobCard(j, busy, block, stage, caution)));
             }
         }
@@ -431,10 +440,14 @@ public partial class MainWindow : Window
 
         bool empty = wanted.Count == 0;
         EmptyState.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
-        if (empty) EmptyNote.Text = s.Queue is null && Offline
-            ? "Requests will show here as soon as AutoPrint can connect."
-            : $"New ones appear here by themselves{(_settings.SoundOn ? ", with a sound" : "")}.\nYour customers send files to shop code {_creds.ShopCode}.";
-        TabRequests.Content = waiting.Count + attention.Count > 0 ? $"Requests  ·  {waiting.Count + attention.Count}" : "Requests";
+        if (empty)
+        {
+            EmptyTitle.Text = query.Length > 0 ? $"No open request matches “{query}”" : "No print requests right now";
+            EmptyNote.Text = query.Length > 0 ? "Check the code with the customer. If it was already answered or printed, it is under Finished."
+                : s.Queue is null && Offline ? "Requests will show here as soon as AutoPrint can connect."
+                : $"New ones appear here by themselves{(_settings.SoundOn ? ", with a sound" : "")}.\nYour customers send files to shop code {_creds.ShopCode}.";
+        }
+        TabRequests.Content = open > 0 ? $"Requests  ·  {open}" : "Requests";
         if (FinishedPane.IsVisible) RenderFinished();
     }
 
@@ -621,6 +634,17 @@ public partial class MainWindow : Window
         var label = Ui.T("TO COLLECT", "Eyebrow"); label.HorizontalAlignment = HorizontalAlignment.Right;
         pay.Children.Add(label);
         pay.Children.Add(Ui.T(JobText.Money(j.AmountPaise), "Amount"));
+        // an order with several files: this amount is for this file only, so say what the whole order comes to
+        if (JobText.OrderLine(j) is { } order)
+        {
+            var files = Ui.T(order.Files, "Soft"); files.HorizontalAlignment = HorizontalAlignment.Right; files.TextWrapping = TextWrapping.NoWrap;
+            pay.Children.Add(files);
+            if (order.Total is not null)
+            {
+                var total = Ui.T(order.Total, "Body"); total.FontWeight = FontWeights.SemiBold; total.HorizontalAlignment = HorizontalAlignment.Right; total.TextWrapping = TextWrapping.NoWrap;
+                pay.Children.Add(total);
+            }
+        }
         Grid.SetColumn(pay, 2); grid.Children.Add(pay);
         return grid;
     }
@@ -840,7 +864,9 @@ public partial class MainWindow : Window
         bool typed = SearchBox.Text.Length > 0;
         SearchHint.Visibility = typed ? Visibility.Collapsed : Visibility.Visible;
         SearchClear.Visibility = typed ? Visibility.Visible : Visibility.Collapsed;
-        RenderFinished();
+        if (_creds is null) return;
+        Render();                                                  // the Requests cards
+        if (TabFinished.IsChecked == true) RenderFinished();
     }
 
     private void OnSearchClear(object sender, RoutedEventArgs e) { SearchBox.Clear(); SearchBox.Focus(); }
@@ -922,7 +948,8 @@ public partial class MainWindow : Window
         if (stillQueued is { } queued) _queueLook[queued] = QueueLook.Waiting;
         foreach (var r in runs) { _runs[r.JobId!.Value] = r; if (r.Kind == RunKind.Failed) _failedRun = r; }
         ShowQueue(creds);
-        if (finishedTab) { TabFinished.IsChecked = true; SearchBox.Text = search; }
+        if (finishedTab) TabFinished.IsChecked = true;
+        SearchBox.Text = search;
     }
 
     internal void DemoPairing(string? code, TimeSpan left, bool offline)

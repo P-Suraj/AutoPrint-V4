@@ -475,6 +475,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/shop/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Shop Settings */
+        get: operations["shopSettings"];
+        put?: never;
+        /**
+         * Shop Settings Update
+         * @description The shopkeeper renames the shop, says whether it prints in colour, and sets its prices. New prices are a
+         *     new version of the price list; a price a customer has already been shown stays as it was shown.
+         */
+        post: operations["shopSettingsUpdate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/shops/{shop_code}": {
         parameters: {
             query?: never;
@@ -753,8 +775,19 @@ export interface components {
              * Format: uuid
              */
             job_id: string;
+            /**
+             * Order Files
+             * @description How many files the customer sent in this order
+             * @default 1
+             */
+            order_files: number;
             /** Order Short Code */
             order_short_code: string;
+            /**
+             * Order Total Paise
+             * @description What to collect for the whole order
+             */
+            order_total_paise?: number | null;
             /** Page Count */
             page_count: number;
             /** Page Range */
@@ -1096,8 +1129,45 @@ export interface components {
             agent_online: boolean;
             /** Code */
             code: string;
+            /**
+             * Color Available
+             * @description False when the shop has said it does not print in colour
+             * @default true
+             */
+            color_available: boolean;
             /** Name */
             name: string;
+        };
+        /**
+         * ShopSettings
+         * @description What the shopkeeper can change from the dashboard.
+         */
+        ShopSettings: {
+            bw?: components["schemas"]["RateTable"] | null;
+            color?: components["schemas"]["RateTable"] | null;
+            /** Color Enabled */
+            color_enabled: boolean;
+            /**
+             * Rate Card Version
+             * @description Null when the shop has no price list yet
+             */
+            rate_card_version?: number | null;
+            /** Shop Code */
+            shop_code: string;
+            /** Shop Name */
+            shop_name: string;
+        };
+        /**
+         * ShopSettingsUpdate
+         * @description Every field is optional: what is left out stays as it is. Prices are sent as both tables together.
+         */
+        ShopSettingsUpdate: {
+            bw?: components["schemas"]["RateTable"] | null;
+            color?: components["schemas"]["RateTable"] | null;
+            /** Color Enabled */
+            color_enabled?: boolean | null;
+            /** Shop Name */
+            shop_name?: string | null;
         };
         /** ShopSignedIn */
         ShopSignedIn: {
@@ -4416,6 +4486,270 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ShopPairLookup"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Gone */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Upgrade Required */
+            426: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    shopSettings: {
+        parameters: {
+            query?: never;
+            header: {
+                "x-shop-key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShopSettings"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Gone */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Upgrade Required */
+            426: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    shopSettingsUpdate: {
+        parameters: {
+            query?: never;
+            header: {
+                "x-shop-key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ShopSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShopSettings"];
                 };
             };
             /** @description Bad Request */

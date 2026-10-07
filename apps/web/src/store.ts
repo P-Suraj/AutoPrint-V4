@@ -47,23 +47,34 @@ export function forgetOrder(orderId: string): void {
   forgetSecret(orderId);
 }
 
-// ---- the file being prepared in this tab. Kept for the tab only, so a refresh or the back button during
-// "Settings" returns to the uploaded file instead of asking for it again. The secret stays in saveSecret.
+// ---- the files being prepared in this tab. Kept for the tab only, so a refresh or the back button during
+// "Settings" returns to the uploaded files instead of asking for them again. The secret stays in saveSecret.
 const DRAFT = "ap.draft";
-export type Draft = {
-  shopCode: string; orderId: string; shortCode: string; documentId: string | null; pageCount: number; fileName: string;
+export type DraftDoc = {
+  documentId: string; pageCount: number; fileName: string;
   copies: number; color: boolean; duplex: boolean; pageRange: string | null;
 };
+export type Draft = { shopCode: string; orderId: string; shortCode: string; docs: DraftDoc[] };
 
 export function saveDraft(d: Draft): void {
-  try { sessionStorage.setItem(DRAFT, JSON.stringify(d)); } catch { /* a refresh will ask for the file again */ }
+  try { sessionStorage.setItem(DRAFT, JSON.stringify(d)); } catch { /* a refresh will ask for the files again */ }
 }
+
+const isDoc = (v: unknown): v is DraftDoc => {
+  const d = v as Partial<DraftDoc> | null;
+  return !!d && typeof d.documentId === "string" && typeof d.pageCount === "number" && d.pageCount >= 1 && typeof d.fileName === "string"
+    && typeof d.copies === "number" && typeof d.color === "boolean" && typeof d.duplex === "boolean" && (d.pageRange === null || typeof d.pageRange === "string");
+};
 
 export function loadDraft(shopCode: string): Draft | null {
   try {
-    const d = JSON.parse(sessionStorage.getItem(DRAFT) ?? "null") as Draft | null;
+    const d = JSON.parse(sessionStorage.getItem(DRAFT) ?? "null") as (Partial<Draft> & Partial<DraftDoc>) | null;
     if (!d || d.shopCode !== shopCode || typeof d.orderId !== "string" || typeof d.shortCode !== "string") return null;
-    return loadSecret(d.orderId) === null ? null : d;
+    if (loadSecret(d.orderId) === null) return null;
+    // a tab opened before orders could hold several files kept one file's fields beside the order's
+    const docs = Array.isArray(d.docs) ? d.docs.filter(isDoc) : isDoc(d) ? [{ documentId: d.documentId, pageCount: d.pageCount, fileName: d.fileName,
+      copies: d.copies, color: d.color, duplex: d.duplex, pageRange: d.pageRange }] : [];
+    return { shopCode, orderId: d.orderId, shortCode: d.shortCode, docs };
   } catch { return null; }
 }
 

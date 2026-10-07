@@ -60,3 +60,12 @@ The site and the database are updated separately. New code is written to work wi
 4. Send one PDF from `/s/TST001` and approve it in the Windows app, or run `PY e2e/run_live_e2e.py`.
 
 Both commands are tested locally against a scratch database (7 Oct 2026). **Not yet run live.** If `status` warns that the database has updates the live code does not know, an older version of the site is live: redeploy the current one.
+
+## 9. What the shopkeeper can now do alone, and publishing the installer (7 October 2026, after migration 0020)
+
+- **Name, prices, colour:** on the dashboard, "Prices and shop details". Saving new prices publishes a new price list version, the same as `set-rates`; an order already priced keeps its price. "Black & white only" tells customers the shop has no colour printing and the server refuses colour. The founder tools (`rename`, `set-rates`, `prices`) still work. **Not yet used on the live site.**
+- **Installer download:** the dashboard's "Download AutoPrint for Windows" button opens `https://github.com/P-Suraj/AutoPrint-V4/releases/latest/download/AutoPrintSetup.exe`. It works only after a release exists. For every new build:
+  1. `powershell -ExecutionPolicy Bypass -File apps\desktop\installer\build.ps1 -Version x.y.z` (writes `dist\AutoPrintSetup-x.y.z.exe` and the same file as `dist\AutoPrintSetup.exe`).
+  2. On GitHub: the repository, Releases, "Draft a new release", tag `vx.y.z`, attach `dist\AutoPrintSetup.exe` (this exact name) and the `.sha256.txt` file, Publish.
+  3. Open the dashboard and press the button once to see that the download starts.
+  The repository is public, so anyone with the link can download the installer; it holds no secrets (a shop is connected afterwards with the code on the dashboard).

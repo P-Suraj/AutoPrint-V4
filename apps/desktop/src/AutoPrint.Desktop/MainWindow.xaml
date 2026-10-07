@@ -73,33 +73,36 @@
         <!-- ============================================================ the working screen -->
         <Grid x:Name="QueueView" Grid.Row="2" Visibility="Collapsed">
             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-            <Border Grid.Row="0" Background="{StaticResource Chip}" CornerRadius="12" Padding="4" HorizontalAlignment="Left" Margin="24,14,24,0">
-                <StackPanel Orientation="Horizontal">
-                    <RadioButton x:Name="TabRequests" Style="{StaticResource Tab}" GroupName="tabs" IsChecked="True" Checked="OnTab" Content="Requests"/>
-                    <RadioButton x:Name="TabFinished" Style="{StaticResource Tab}" GroupName="tabs" Checked="OnTab" Content="Finished"/>
-                </StackPanel>
-            </Border>
+            <!-- the tabs, and one search box for both of them: the customer says a code, the shopkeeper types it -->
+            <DockPanel Grid.Row="0" Margin="24,14,24,0" LastChildFill="False">
+                <Border DockPanel.Dock="Left" Background="{StaticResource Chip}" CornerRadius="12" Padding="4" VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal">
+                        <RadioButton x:Name="TabRequests" Style="{StaticResource Tab}" GroupName="tabs" IsChecked="True" Checked="OnTab" Content="Requests"/>
+                        <RadioButton x:Name="TabFinished" Style="{StaticResource Tab}" GroupName="tabs" Checked="OnTab" Content="Finished"/>
+                    </StackPanel>
+                </Border>
+                <Grid DockPanel.Dock="Right" Width="330" VerticalAlignment="Center" Margin="16,0,0,0">
+                    <TextBox x:Name="SearchBox" Padding="36,0,36,0" TextChanged="OnSearch" MaxLength="40" CharacterCasing="Upper"/>
+                    <TextBlock Text="&#xE721;" Style="{StaticResource Icon}" Foreground="{StaticResource Muted}" Margin="13,0,0,0" HorizontalAlignment="Left" IsHitTestVisible="False"/>
+                    <TextBlock x:Name="SearchHint" Text="Find an order by its code, like K7QD" Foreground="{StaticResource Muted}" Margin="38,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False" TextTrimming="CharacterEllipsis"/>
+                    <Button x:Name="SearchClear" Style="{StaticResource Quiet}" Click="OnSearchClear" HorizontalAlignment="Right" Margin="0,0,4,0" Padding="8,0" Visibility="Collapsed" ToolTip="Clear">
+                        <TextBlock Text="&#xE711;" Style="{StaticResource Icon}" FontSize="11" Foreground="{StaticResource Muted}"/>
+                    </Button>
+                </Grid>
+            </DockPanel>
 
             <Grid x:Name="RequestsPane" Grid.Row="1">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Focusable="False" Padding="24,14,24,12">
                     <StackPanel x:Name="Cards"/>
                 </ScrollViewer>
                 <StackPanel x:Name="EmptyState" VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="420" Margin="24" IsHitTestVisible="False">
-                    <TextBlock Style="{StaticResource H2}" FontSize="18" HorizontalAlignment="Center" Text="No print requests right now"/>
+                    <TextBlock x:Name="EmptyTitle" Style="{StaticResource H2}" FontSize="18" HorizontalAlignment="Center" TextAlignment="Center" Text="No print requests right now"/>
                     <TextBlock x:Name="EmptyNote" Style="{StaticResource Soft}" FontSize="14" TextAlignment="Center" Margin="0,8,0,0"/>
                 </StackPanel>
             </Grid>
 
             <DockPanel x:Name="FinishedPane" Grid.Row="1" Visibility="Collapsed" Margin="24,14,24,0">
-                <Grid DockPanel.Dock="Top" MaxWidth="380" HorizontalAlignment="Left" Width="380">
-                    <TextBox x:Name="SearchBox" Padding="36,0,36,0" TextChanged="OnSearch" MaxLength="40" CharacterCasing="Upper"/>
-                    <TextBlock Text="&#xE721;" Style="{StaticResource Icon}" Foreground="{StaticResource Muted}" Margin="13,0,0,0" HorizontalAlignment="Left" IsHitTestVisible="False"/>
-                    <TextBlock x:Name="SearchHint" Text="Find an order by its code, like K7QD" Foreground="{StaticResource Muted}" Margin="38,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False"/>
-                    <Button x:Name="SearchClear" Style="{StaticResource Quiet}" Click="OnSearchClear" HorizontalAlignment="Right" Margin="0,0,4,0" Padding="8,0" Visibility="Collapsed" ToolTip="Clear">
-                        <TextBlock Text="&#xE711;" Style="{StaticResource Icon}" FontSize="11" Foreground="{StaticResource Muted}"/>
-                    </Button>
-                </Grid>
-                <TextBlock x:Name="FinishedNote" DockPanel.Dock="Top" Style="{StaticResource Soft}" Margin="0,10,0,10"/>
+                <TextBlock x:Name="FinishedNote" DockPanel.Dock="Top" Style="{StaticResource Soft}" Margin="0,0,0,10"/>
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Focusable="False">
                     <Border x:Name="FinishedBox" Style="{StaticResource CardBox}" Padding="18,4" VerticalAlignment="Top">
                         <StackPanel x:Name="FinishedRows"/>
