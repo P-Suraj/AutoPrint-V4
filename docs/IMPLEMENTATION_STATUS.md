@@ -478,3 +478,7 @@ Branch `wip/2026-10-07-shop-settings-multi-file`. **Nothing here is deployed, mi
 ## Deployed: the founder feedback build (7 October 2026, night)
 
 On the founder word "deploy": `wip/2026-10-07-shop-settings-multi-file` merged into `main` (merge commit `15f13f5`) and pushed. **Seen live:** `GET https://autoprint-v4.vercel.app/v1/shops/TST001` answered with the new `color_available: true` about a minute after the push, so the new API is serving, and it runs on the database without migration 0020 as designed. **Not checked live: anything else** (the customer page with several files, the dashboard panel, which cannot load until 0020 is applied, and the download button, which has no release behind it yet). Migration 0020 is NOT applied: only the founder can run `ap_remote.py migrate`.
+
+## Live database at 0020 (7 October 2026, run by the founder)
+
+The founder ran `ap_remote.py migrate` and pasted the output: "Applied now: 1, 0020_shop_settings", then `status`: 20 updates applied, 0020 at 2026-10-07 08:57 (UTC), "Nothing pending: the database matches the code that is live." Taken from his pasted output; the model session cannot run these. Still not checked live: the dashboard price panel, a several-file order, the download button (no release yet).

@@ -126,3 +126,5 @@ Built: the shopkeeper sets name, prices and colour on or off on the dashboard (m
 - Three forked sub-agents with separate files worked without clashes. `store.ts`, `api.ts` and `styles.css` are shared by the customer page and the dashboard: give each file to one owner.
 
 **Update, 7 October night:** step 1 above is DONE (`main` at merge commit `15f13f5` is deployed; the live shop lookup shows `color_available`). Steps 2 to 5 are still to do, starting with `PY scripts\ap_remote.py migrate`.
+
+**Update:** step 2 is DONE too (founder ran `migrate` and `status` on 7 October, 08:57 UTC: 20 applied, nothing pending). Next: step 3 (publish the GitHub release with `dist\AutoPrintSetup.exe`), then steps 4 and 5.
