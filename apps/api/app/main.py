@@ -27,7 +27,7 @@ from fastapi.responses import JSONResponse
 
 from app import schemas as s
 from app import report as reports
-from app.db import Database, PoolBusy, sha256_hex
+from app.db import Database, InvalidText, PoolBusy, check_text, sha256_hex
 from app.email_auth import EmailAuth, EmailAuthError, make_email_auth
 from app.errors import CATALOG, SQL_RESULT_MAP, SQL_SUCCESS
 from app.pdf_validation import PdfRejected, validate_pdf
@@ -45,6 +45,7 @@ ERR = {400: {"model": s.ErrorResponse}, 401: {"model": s.ErrorResponse}, 404: {"
        500: {"model": s.ErrorResponse}, 501: {"model": s.ErrorResponse}, 503: {"model": s.ErrorResponse}}
 
 CAN_CANCEL_JOB_STATES = {"awaiting_approval", "approved"}
+REPORT_STATEMENT_TIMEOUT_MS = 25_000     # founder reports read many rows; still under the host's 30 s request limit
 
 
 class ApiException(Exception):
@@ -165,13 +166,20 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
         e = CATALOG["invalid_request"]       # never echo the offending input back
         return JSONResponse(status_code=e.http_status, content={"error": {"code": e.code, "message": e.message}})
 
+    @app.exception_handler(InvalidText)
+    async def invalid_text_handler(_: Request, __: InvalidText):
+        """A path, header or body value holds a NUL character or broken Unicode. PostgreSQL cannot store it, so it is
+        refused before any statement is sent: a clean 422 instead of the generic 500."""
+        e = CATALOG["invalid_request"]
+        return JSONResponse(status_code=e.http_status, content={"error": {"code": e.code, "message": e.message}})
+
     @app.exception_handler(psycopg2.OperationalError)
     @app.exception_handler(psycopg2.InterfaceError)
     @app.exception_handler(PoolBusy)
     @app.exception_handler(httpx.HTTPError)
     async def dependency_handler(request: Request, exc: Exception):
-        """The database or the file store could not be reached, timed out, or (deadlock, cancelled statement) asked for a
-        retry. That is not a bug in the request: answer 503 "try again" so the web page and the shop app retry, instead
+        """The database or the file store could not be reached, timed out, or (deadlock, statement over its time limit)
+        asked for a retry. That is not a bug in the request: answer 503 "try again" so the web page and the shop app retry, instead
         of the generic 500. Only the exception type and the PostgreSQL error class are logged; the message can hold a
         host name or a URL."""
         log.error("dependency failure %s %s on %s", type(exc).__name__, getattr(exc, "pgcode", None) or "-",
@@ -223,11 +231,36 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
             raise ApiException("no_rate_card") from None
         return s.RateCardPublic(version=row[0], bw=s.RateTable(**row[1]["bw"]), color=s.RateTable(**row[1]["color"]))
 
+    def limit_bucket(request: Request, purpose: str, scope: str = "", by_address: bool = True) -> str:
+        ip = (request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "?"))
+        return sha256_hex(f"{settings.limiter_secret}|{purpose}|{scope}|{ip if by_address else '-'}")[:40]
+
+    def in_one_trip(sql: str, params: tuple) -> Optional[tuple]:
+        """Runs the limiter, the secret check and the work of a customer request as ONE statement (one round trip to
+        the database instead of one per step). The statement is a CASE: PostgreSQL evaluates its branches in order
+        and stops at the first that applies, so the order of checks is the order the steps had one by one.
+
+        Returns None when the caller must do the steps one by one instead (each handler keeps that path):
+          * a value cannot be stored as text (InvalidText). One by one, the limiter and the secret are still checked
+            first, so the caller gets the same answer in the same order as before
+          * the database refused the statement as a whole (for example the limiter is broken). One statement is one
+            transaction, so nothing was kept. One by one, a broken limiter is skipped and the customer is served
+        A lost connection, a deadlock or a statement over its time limit is NOT retried: it goes to the caller as
+        "try again" (503), as for every other statement."""
+        try:
+            return db.one(sql, params)
+        except InvalidText:
+            return None
+        except (psycopg2.OperationalError, psycopg2.InterfaceError):
+            raise
+        except psycopg2.Error as exc:
+            log.error("combined statement failed (%s %s); doing the steps one by one", type(exc).__name__, exc.pgcode or "-")
+            return None
+
     def limit(request: Request, purpose: str, maximum: int, window_seconds: int, scope: str = "", by_address: bool = True) -> None:
         """Fixed-window limit per caller address (hashed with a server secret; the address is never stored).
         If the limiter itself fails the request is allowed: a broken counter must not stop a shop's customers."""
-        ip = (request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "?"))
-        bucket = sha256_hex(f"{settings.signing_key}|{purpose}|{scope}|{ip if by_address else '-'}")[:40]
+        bucket = limit_bucket(request, purpose, scope, by_address)
         try:
             ok = db.call_scalar("rate_hit", bucket, window_seconds, maximum)
         except Exception:
@@ -239,21 +272,53 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
     @customer.post("/shops/{shop_code}/orders", response_model=s.CreateOrderResponse, status_code=201, operation_id="createOrder")
     def create_order(shop_code: str, request: Request):
         # one address (a whole campus can share one) gets 60 new orders per 10 minutes; one shop 300 in total
-        limit(request, "order", 60, 600)
-        limit(request, "order-shop", 300, 600, scope=shop_code.strip().upper(), by_address=False)
+        code = shop_code.strip().upper()
         secret = secrets.token_hex(32)
-        res = check(db.call("create_order", shop_code.strip().upper(), sha256_hex(secret)))
+        # One round trip: both limits and the new order. A refused limit ends the CASE, so the later steps do not run.
+        row = in_one_trip(
+            "SELECT CASE WHEN ap.rate_hit(%s, 600, 60) IS NOT TRUE THEN NULL "
+            "WHEN ap.rate_hit(%s, 600, 300) IS NOT TRUE THEN NULL "
+            "ELSE ap.create_order(%s, %s) END",
+            (limit_bucket(request, "order"), limit_bucket(request, "order-shop", code, False), code, sha256_hex(secret)))
+        if row is None:                                       # the steps one by one
+            limit(request, "order", 60, 600)
+            limit(request, "order-shop", 300, 600, scope=code, by_address=False)
+            res = db.call("create_order", code, sha256_hex(secret))
+        elif row[0] is None:
+            raise ApiException("rate_limited")
+        else:
+            res = row[0]
+        check(res)
         return s.CreateOrderResponse(order_id=res["order_id"], order_secret=secret, short_code=res["short_code"],
                                      expires_at=res["expires_at"], access_until=res["access_until"])
 
     @customer.post("/orders/{order_id}/documents", response_model=s.RegisterDocumentResponse, status_code=201, operation_id="registerDocument")
     def register_document(order_id: UUID, body: s.RegisterDocumentRequest, request: Request, x_order_secret: str = Header(...)):
-        limit(request, "upload", 150, 600)
-        authorize_order(order_id, x_order_secret)
-        if body.byte_size > settings.max_upload_bytes:
-            raise ApiException("file_too_large")
+        # Every job needs its own registered file, and a job waits for approval for at most one hour, so this is also
+        # the cap on jobs one address can have waiting at a shop: 120 files an hour (a single customer needs at most
+        # the 20 files of one order; the rest is room for a campus that shares one address).
         key = f"orders/{order_id}/{uuid4().hex}.pdf"
-        res = check(db.call("register_document", order_id, body.file_name, body.byte_size, key))
+        too_large = body.byte_size > settings.max_upload_bytes
+        # One round trip: the limit, the secret, then the registration (not attempted for a file that is too large).
+        gate = ("SELECT CASE WHEN ap.rate_hit(%s, 3600, 120) IS NOT TRUE THEN jsonb_build_object('refused', 'rate_limited') "
+                "WHEN ap.order_for_secret(%s) IS DISTINCT FROM %s THEN jsonb_build_object('refused', 'order_not_found') ")
+        params = (limit_bucket(request, "upload"), sha256_hex(x_order_secret), order_id)
+        if too_large:
+            row = in_one_trip(gate + "ELSE jsonb_build_object('refused', 'file_too_large') END", params)
+        else:
+            row = in_one_trip(gate + "ELSE ap.register_document(%s, %s, %s, %s) END",
+                              params + (order_id, body.file_name, body.byte_size, key))
+        if row is None:                                       # the steps one by one
+            limit(request, "upload", 120, 3600)
+            authorize_order(order_id, x_order_secret)
+            if too_large:
+                raise ApiException("file_too_large")
+            res = db.call("register_document", order_id, body.file_name, body.byte_size, key)
+        elif "refused" in row[0]:
+            raise ApiException(row[0]["refused"])
+        else:
+            res = row[0]
+        check(res)
         grant = storage.create_upload(key, body.byte_size)
         return s.RegisterDocumentResponse(document_id=res["document_id"], upload_url=grant.url, upload_headers=grant.headers)
 
@@ -290,15 +355,32 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
 
     @customer.post("/orders/{order_id}/quote", response_model=s.QuoteResponse, status_code=201, operation_id="createQuote")
     def create_quote(order_id: UUID, body: s.CreateQuoteRequest, request: Request, x_order_secret: str = Header(...)):
-        limit(request, "quote", 300, 600)
-        authorize_order(order_id, x_order_secret)
-        rate = db.one("SELECT r.id, r.version, r.rules FROM ap.rate_cards r JOIN ap.orders o ON o.shop_id = r.shop_id "
-                      "WHERE o.id = %s AND r.retired_at IS NULL", (order_id,))
+        # First round trip: the limit, the secret, the shop's price list and the page counts of this order's files,
+        # all read at the same instant. The price list and the files are only looked at when the gate says "ok".
+        row = in_one_trip(
+            "WITH g AS MATERIALIZED (SELECT CASE WHEN ap.rate_hit(%s, 600, 300) IS NOT TRUE THEN 'rate_limited' "
+            "WHEN ap.order_for_secret(%s) IS DISTINCT FROM %s THEN 'order_not_found' ELSE 'ok' END AS gate) "
+            "SELECT g.gate, rc.id, rc.version, rc.rules, "
+            "(SELECT jsonb_object_agg(d.id::text, d.page_count) FROM ap.documents d "
+            "WHERE g.gate = 'ok' AND d.order_id = %s AND d.status = 'validated') "
+            "FROM g LEFT JOIN LATERAL (SELECT r.id, r.version, r.rules FROM ap.rate_cards r "
+            "JOIN ap.orders o ON o.shop_id = r.shop_id WHERE g.gate = 'ok' AND o.id = %s AND r.retired_at IS NULL LIMIT 1) rc ON true",
+            (limit_bucket(request, "quote"), sha256_hex(x_order_secret), order_id, order_id, order_id))
+        if row is None:                                       # the steps one by one
+            limit(request, "quote", 300, 600)
+            authorize_order(order_id, x_order_secret)
+            rate = db.one("SELECT r.id, r.version, r.rules FROM ap.rate_cards r JOIN ap.orders o ON o.shop_id = r.shop_id "
+                          "WHERE o.id = %s AND r.retired_at IS NULL", (order_id,))
+            pages = None if rate is None else {str(r[0]): r[1] for r in db.rows(
+                "SELECT id, page_count FROM ap.documents WHERE order_id = %s AND status = 'validated'", (order_id,))}
+        elif row[0] != "ok":
+            raise ApiException(row[0])
+        else:
+            rate = None if row[1] is None else row[1:4]
+            pages = row[4] or {}
         if rate is None:
             raise ApiException("no_rate_card")
         rate_id, version, rules = rate
-        pages = {str(r[0]): r[1] for r in db.rows(
-            "SELECT id, page_count FROM ap.documents WHERE order_id = %s AND status = 'validated'", (order_id,))}
         items, total = [], 0
         for item in body.items:
             page_count = pages.get(str(item.document_id))
@@ -310,8 +392,9 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
             except PricingError as exc:
                 raise ApiException(exc.code) from None
             total += price.amount_paise
+            # the range is stored in its normal form (price.page_range), never as the customer typed it
             items.append({"document_id": str(item.document_id), "copies": item.options.copies, "color": item.options.color,
-                          "duplex": item.options.duplex, "page_range": item.options.page_range or None,
+                          "duplex": item.options.duplex, "page_range": price.page_range,
                           "selected_pages": price.selected_pages, "printed_sides": price.printed_sides,
                           "amount_paise": price.amount_paise, "paise_per_side": price.paise_per_side})
         res = check(db.call("create_quote", order_id, [{k: v for k, v in i.items() if k != "paise_per_side"} for i in items],
@@ -323,9 +406,16 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
 
     @customer.post("/orders/{order_id}/submit", response_model=s.SubmitOrderResponse, operation_id="submitOrder")
     def submit_order(order_id: UUID, body: s.SubmitOrderRequest, x_order_secret: str = Header(...)):
-        authorize_order(order_id, x_order_secret)
-        res = check(db.call("submit_order", order_id, body.quote_id))
-        pay = db.one("SELECT mode, status, amount_paise FROM ap.payments WHERE order_id = %s", (order_id,))
+        # One round trip: the secret check and the submission. Nothing here can fail as text, and there is no limiter.
+        res = db.one("SELECT CASE WHEN ap.order_for_secret(%s) IS DISTINCT FROM %s THEN NULL ELSE ap.submit_order(%s, %s) END",
+                     (sha256_hex(x_order_secret), order_id, order_id, body.quote_id))[0]
+        if res is None:
+            raise ApiException("order_not_found")             # same answer for "wrong secret" and "no such order"
+        check(res)
+        if "payment_mode" in res:                             # ap.submit_order from migration 0019 answers with the payment
+            pay = (res["payment_mode"], res["payment_status"], res["amount_paise"])
+        else:                                                 # a database without 0019: read the payment, as before
+            pay = db.one("SELECT mode, status, amount_paise FROM ap.payments WHERE order_id = %s", (order_id,))
         return s.SubmitOrderResponse(order_id=order_id, job_ids=res["job_ids"], approval_expires_at=res["expires_at"],
                                      payment_mode=pay[0], payment_status=pay[1], amount_paise=pay[2])
 
@@ -570,12 +660,21 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
         from app.migrate import apply_pending
         return apply_pending(settings.database_url)
 
+    @app.get("/v1/internal/status", include_in_schema=False)
+    def internal_status(x_maintenance_token: str = Header("")):
+        """Founder tool: which repo migration files are applied to this database and which are still pending.
+        Read-only; applies nothing."""
+        require_maintenance_token(x_maintenance_token)
+        from app.migrate import migration_status
+        return {"contract_version": s.CONTRACT_VERSION, "api_version": API_VERSION, **migration_status(db)}
+
     @app.post("/v1/internal/shop", include_in_schema=False)
     def provision_shop(body: dict, x_maintenance_token: str = Header("")):
         """Founder tool: creates a shop (if the code is new) and/or publishes a new rate card version, in one transaction.
         Needed because the database port is not reachable from the founder PC."""
         _json, _re = json, re
         require_maintenance_token(x_maintenance_token)
+        check_text(body)
         code, name, rules = str(body.get("code", "")).strip().upper(), str(body.get("name", "")).strip(), body.get("rules")
         if not _re.fullmatch(r"[A-Z]{3}[0-9]{3}", code):
             raise ApiException("shop_not_found")
@@ -629,15 +728,24 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
     @app.post("/v1/internal/purge", include_in_schema=False)
     def purge_order(body: dict, x_maintenance_token: str = Header("")):
         """Deletes the uploaded documents of one order now (a customer asked for it). The order, job and event records stay,
-        without any file. Refused while a job could still print (approved or printing) or wait for approval."""
+        without any file. Refused while a job could still print (approved or printing) or wait for approval.
+
+        A 4-character order code is reused once its order has ended, so a shop can have several orders with the same
+        code inside 30 days. Only ONE order is ever purged per call: the most recent, unless "which" picks an older
+        one (1 = most recent, 2 = the one before, ...). The answer lists every match with its time so the founder can
+        see whether the right one was taken."""
         require_maintenance_token(x_maintenance_token)
         shop_code, short = str(body.get("shop_code", "")).strip().upper(), str(body.get("order", "")).strip().upper()
+        which = body.get("which", 1)
+        if not isinstance(which, int) or isinstance(which, bool) or which < 1:
+            raise ApiException("invalid_request")
         orders = db.rows(
-            "SELECT o.id FROM ap.orders o JOIN ap.shops s ON s.id = o.shop_id WHERE s.code = %s AND o.short_code = %s "
-            "AND o.access_until > now() - interval '30 days'", (shop_code, short))
-        if not orders:
+            "SELECT o.id, o.created_at, o.status::text FROM ap.orders o JOIN ap.shops s ON s.id = o.shop_id "
+            "WHERE s.code = %s AND o.short_code = %s AND o.access_until > now() - interval '30 days' "
+            "ORDER BY o.created_at DESC, o.id", (shop_code, short))
+        if not orders or which > len(orders):
             raise ApiException("order_not_found")
-        ids = [r[0] for r in orders]
+        ids = [orders[which - 1][0]]
         live = db.one("SELECT count(*) FROM ap.jobs WHERE order_id = ANY(%s) AND status IN ('awaiting_approval', 'approved', 'printing')", (ids,))[0]
         if live:
             raise ApiException("not_actionable")
@@ -649,7 +757,9 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
             db.one("SELECT ap.mark_document_deleted(%s)", (document_id,))
             n += 1
         remaining = db.one("SELECT count(*) FROM ap.documents WHERE order_id = ANY(%s) AND deleted_at IS NULL", (ids,))[0]
-        return {"orders_matched": len(ids), "documents_deleted_now": n, "documents_remaining": remaining}
+        return {"orders_matched": len(orders), "purged": which, "documents_deleted_now": n, "documents_remaining": remaining,
+                "matches": [{"which": i, "created_at": o[1], "status": o[2], "purged_now": i == which}
+                            for i, o in enumerate(orders, start=1)]}
 
     def report_timezone(tz: str) -> str:
         """Hours and days in the report are shown in this time zone. Checked by asking the database, never trusted."""
@@ -669,7 +779,8 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
         Window: ?hours=N or ?days=N, at most 90 days. See app/report.py for what each number means."""
         require_maintenance_token(x_maintenance_token)
         window = hours if days is None else max(1, min(days, 90)) * 24
-        result = reports.shop_report(db, shop_code.strip().upper(), window, report_timezone(tz), settings.agent_online_seconds)
+        with db.statement_timeout(REPORT_STATEMENT_TIMEOUT_MS):
+            result = reports.shop_report(db, shop_code.strip().upper(), window, report_timezone(tz), settings.agent_online_seconds)
         if result is None:
             raise ApiException("shop_not_found")
         return result
@@ -679,7 +790,8 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
         """Founder tool: every shop in one row (switched on or off, computer online or last seen, jobs today, jobs that
         need a look). Read-only."""
         require_maintenance_token(x_maintenance_token)
-        return {"shops": reports.shops_overview(db, report_timezone(tz), settings.agent_online_seconds)}
+        with db.statement_timeout(REPORT_STATEMENT_TIMEOUT_MS):
+            return {"shops": reports.shops_overview(db, report_timezone(tz), settings.agent_online_seconds)}
 
     @app.get("/v1/internal/shop/{shop_code}/rates", include_in_schema=False)
     def shop_rates(shop_code: str, x_maintenance_token: str = Header("")):
@@ -705,6 +817,7 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
         dashboard link stops working. The shop computer keeps showing and printing what was already sent. Nothing is
         deleted, and switching back on restores everything. The change is written to the events table (no names)."""
         require_maintenance_token(x_maintenance_token)
+        check_text(body)
         code = str(body.get("code", "")).strip().upper()
         active, name = body.get("is_active"), body.get("name")
         if active is not None and not isinstance(active, bool):

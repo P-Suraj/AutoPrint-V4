@@ -18,15 +18,15 @@
     <PublishTrimmed>false</PublishTrimmed>
     <DebugType>embedded</DebugType>
     <!-- File properties Windows shows under Details, and what SmartScreen and antivirus read as the publisher text. -->
-    <Version>4.0.1</Version>
-    <AssemblyVersion>4.0.1.0</AssemblyVersion>
-    <FileVersion>4.0.1.0</FileVersion>
+    <Version>4.0.3</Version>
+    <AssemblyVersion>4.0.3.0</AssemblyVersion>
+    <FileVersion>4.0.3.0</FileVersion>
     <Product>AutoPrint</Product>
     <Company>Suraj Pandavula</Company>
     <Authors>Suraj Pandavula</Authors>
     <Copyright>Copyright (c) 2026 Suraj Pandavula</Copyright>
     <Description>AutoPrint shop app: receives customer print requests and prints them on this computer.</Description>
-    <InformationalVersion>4.0.1</InformationalVersion>
+    <InformationalVersion>4.0.3</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 

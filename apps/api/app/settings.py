@@ -32,6 +32,14 @@ class Settings:
     environment: str = "development"
     allowed_origins: tuple[str, ...] = ()
 
+    @property
+    def limiter_secret(self) -> str:
+        """The secret that salts the hash of a caller's address in the rate limiter, so the stored bucket names cannot
+        be turned back into addresses. The signing key when there is one (development, tests); in production, where
+        the signing key is not needed and is normally not set, the Supabase secret key, which production cannot start
+        without; then the maintenance token. Never empty: validate() refuses to start otherwise."""
+        return self.signing_key or self.supabase_secret_key or self.maintenance_token
+
     def validate(self) -> "Settings":
         if not self.database_url.startswith(("postgresql://", "postgres://")):
             raise ConfigError("AUTOPRINT_V4_DATABASE_URL must be a PostgreSQL URL")
@@ -41,6 +49,9 @@ class Settings:
             raise ConfigError("AUTOPRINT_V4_SUPABASE_URL (https) and AUTOPRINT_V4_SUPABASE_SECRET_KEY are required for supabase storage")
         if self.storage_backend == "local" and len(self.signing_key) < 32:
             raise ConfigError("AUTOPRINT_V4_SIGNING_KEY must be at least 32 characters for local storage")
+        if not self.limiter_secret:
+            raise ConfigError("no server secret to protect the rate limiter: set AUTOPRINT_V4_SIGNING_KEY, "
+                              "AUTOPRINT_V4_SUPABASE_SECRET_KEY or AUTOPRINT_V4_MAINTENANCE_TOKEN")
         if self.environment == "production":
             if self.storage_backend == "local":
                 raise ConfigError("local storage is for development and tests only")

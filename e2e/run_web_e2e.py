@@ -36,6 +36,21 @@ def wait_port(port: int, name: str, seconds: int = 60) -> None:
     raise SystemExit(f"{name} did not start on port {port}")
 
 
+def dashboard_key(database_url: str, shop_code: str) -> str:
+    """A shopkeeper's private-link key for the scratch shop (it dies with the scratch database)."""
+    import hashlib
+    import secrets
+    import psycopg2
+    key = secrets.token_hex(32)
+    conn = psycopg2.connect(database_url)
+    try:
+        conn.autocommit = True
+        conn.cursor().execute("SELECT ap.shop_login_create(%s, 'link', %s, 'walk')", (shop_code, hashlib.sha256(key.encode()).hexdigest()))
+    finally:
+        conn.close()
+    return key
+
+
 def main() -> int:
     for port in (API_PORT, WEB_PORT):
         s = socket.socket()
@@ -54,14 +69,20 @@ def main() -> int:
     try:
         procs.append(subprocess.Popen([PY, "-m", "uvicorn", "app.asgi:app", "--port", str(API_PORT), "--log-level", "warning"],
                                       cwd=ROOT / "apps" / "api", env=env))
-        procs.append(subprocess.Popen([NPX, "vite", "--port", str(WEB_PORT), "--strictPort", "--host", "127.0.0.1"],
-                                      cwd=ROOT / "apps" / "web", env=env, shell=os.name == "nt"))
+        # E2E_TOOL=perf measures the production build, served the way the host serves it (vite preview); everything else uses the dev server
+        web = ["vite", "--port", str(WEB_PORT), "--strictPort", "--host", "127.0.0.1"]
+        if os.environ.get("E2E_TOOL") == "perf":
+            subprocess.run([NPX, "vite", "build"], cwd=ROOT / "apps" / "web", env=env, shell=os.name == "nt", check=True)
+            web.insert(1, "preview")
+        procs.append(subprocess.Popen([NPX, *web], cwd=ROOT / "apps" / "web", env=env, shell=os.name == "nt"))
         wait_port(API_PORT, "API"); wait_port(WEB_PORT, "web dev server")
         setup = subprocess.run([PY, str(ROOT / "e2e" / "shop_sim.py"), "setup"], env=env, capture_output=True, text=True, check=True)
         import json
         shop = json.loads(setup.stdout)["shop_code"]
         run_env = dict(env, E2E_SHOP_CODE=shop, E2E_PDF=str(tmp / "three.pdf"), E2E_TEXT_FILE=str(tmp / "notes.txt"),
                        E2E_PYTHON=PY, E2E_SHOP_SIM=str(ROOT / "e2e" / "shop_sim.py"))
+        if os.environ.get("E2E_TOOL") == "walk" and not os.environ.get("E2E_SHOP_KEY"):
+            run_env["E2E_SHOP_KEY"] = dashboard_key(url, shop)      # so the walk can show the shopkeeper's pages too
         result = subprocess.run([NPX, "playwright", "test"], cwd=ROOT / "apps" / "web", env=run_env, shell=os.name == "nt")
         return result.returncode
     finally:

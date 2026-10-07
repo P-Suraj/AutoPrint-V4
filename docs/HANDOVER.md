@@ -74,3 +74,40 @@ A customer sends a PDF from a phone (no account); the shopkeeper approves it in 
 - Claude Code runs on the founder laptop; if it sleeps, work pauses. Cloud sessions cannot reach the printer or local files.
 
 Migration 0009 is applied live (6 Oct 2026); email sign-in stays inactive until the Supabase settings and the publishable key are added. Migration 0010 (email sign-ins expire after 30 days and are revoked with their address) is written and tested locally, not applied live.
+
+## CURRENT STATE on 7 October 2026: read this before anything else
+
+(Sections 2 to 5 above describe 6 October and are partly out of date: test counts, installer version and "next steps" are superseded by this section. Evidence for everything here is in `docs/IMPLEMENTATION_STATUS.md`, the sections dated 7 October.)
+
+- **`main` (pushed, live) is unchanged since 6 October:** Windows app 4.0.1, website and API of commit `f04edf8`. Live database: migrations 0001 to 0009 applied; whether 0010 to 0013 were applied by the founder is **not known in this repository** (check with `PY scripts/ap_remote.py status` once the new code is live, or `scripts/ap_report.py`).
+- **Branch `wip/2026-10-06-unverified` is now tested and green locally, and holds everything below. It is NOT merged, NOT deployed, and its migrations are NOT applied live.** The branch name is historical; the work on it is no longer "unverified" in the local sense.
+  - Backend: security-review fixes with tests; migrations 0014 to 0019 (0015 irreversibly blanks names and checksums of already-deleted documents; the others replace one function each); customer routes down to 1 or 2 database round trips; `ap_remote.py status` and `migrate`. Last full run: 301 passed.
+  - Website: 73 unit tests, 17 of 17 browser tests in Edge and in WebKit; preview never delays Continue; pdf.js fetched in the background on the shop page; 2 s status poll between approval and result; small-phone fixes.
+  - Windows app 4.0.3: `dist\AutoPrintSetup-4.0.3.exe` (SHA-256 in the file next to it and in the status file). 177 tests with the real print queue on the virtual printer, 72-step self-test, whole local chain PASS.
+- The failing cancel-versus-claim race of 6 October was the shared test database running out of connections, not migration 0014.
+
+### Next steps, in order
+1. **Founder decides: merge the branch to `main` and push.** Pushing `main` deploys the site and API. Commands: `git checkout main`, `git merge --no-ff wip/2026-10-06-unverified`, `git push origin main`. The new API works with the old database, so deploy first.
+2. **Founder runs** (the Claude session is not permitted to call the live maintenance endpoints): `apps\api\.venv\Scripts\python.exe scripts\ap_remote.py status`, then `... scripts\ap_remote.py migrate`, then `status` again (must say "Nothing pending"). See RUNBOOK section 8.
+3. **Founder runs** `apps\api\.venv\Scripts\python.exe e2e\run_live_e2e.py`, and sends one PDF from a real phone at `/s/TST001`. After deploying also check the worker file is served compressed (command in the status file, website section of 7 October).
+4. **Founder installs `dist\AutoPrintSetup-4.0.3.exe`** over the installed copy, opens Settings and **chooses the real printer** (the installed app was set to Microsoft Print to PDF, which is why order BLS3 failed), then follows `docs/TEST_THE_WINDOWS_APP.md`, including the six things listed there to try on a real screen and printer.
+5. Founder actions still open from before: add the GitHub secret `AUTOPRINT_MAINTENANCE_TOKEN`; in Supabase set the `print-documents` bucket to 25 MB and `application/pdf` only.
+6. Physical certification at the shop (30 to 50 real prints, duplex, colour, failure drills); then the Phase 7 leftovers (clean-PC install, reboot, 24-hour soak).
+7. Payments: parked by the founder until the rest is done. Design and 14 questions in `docs/PAYMENTS_DESIGN.md`.
+
+### Decisions waiting for the founder (nothing was changed for these)
+- Reminder sound: every 2 minutes for up to an hour per unanswered request (up to 29 chimes). Keep, or fewer?
+- Shop poll interval: keep 10 s, halve it (doubles the calls to the host), or "fast for a few minutes after something happens, slow when quiet".
+- The shop page now downloads about 530 KB in the background for every visitor so the preview is quick. Keep, or fetch only when the file button is touched (slower preview, less mobile data)?
+- Requests already waiting when the app starts make no sound at first (a reminder follows after 2 minutes). Keep?
+
+### Known and left open (details in the status file)
+Not load-tested after the round-trip change (`e2e/load_test.py` not re-run); latency on the live pooler not measured; the live PostgreSQL version not checked (the quote statement needs 12 or newer, else it falls back); Settings window scrolls on a 1366 x 768 laptop; the colour test page is black only; the dashboard's offline threshold is a copy of a server setting and trusts the browser clock; a locked PDF uploaded after the 3 s check limit is refused only by the server and that path has no test; finalize could save one database round trip; the docstring of `supabase/tests/test_queue_and_retention.py` still says "0014 to 0018".
+
+### Working notes from this session
+- Sub-agents sharing the local PostgreSQL can exhaust its connections ("too many clients already"): re-run that test alone before believing a failure.
+- `test_migrate_endpoint.py` asserts the newest migration (now `0019_submit_answers_with_payment`); update it when adding one.
+- `vite preview` compresses by itself; do not add a compression plugin (it made the production build blank locally on 6 October).
+- Browser tools: `E2E_TOOL=walk E2E_OUT=<folder>` (screenshots at 320, 360, 412 px, dashboard included) and `E2E_TOOL=perf` (production build, slow-phone profile) through `e2e/run_web_e2e.py`.
+- The founder asked on 7 October not to spend tokens on unnecessary testing: test what a change touches, once.
+- A V3 `F:\AutoPrint\AutoPrint.exe` was running on this PC during the session. Leave it alone.

@@ -3,10 +3,11 @@ using AutoPrint.Core.Shop;
 namespace AutoPrint.Core.Agent;
 
 /// <param name="LastPollAt">Time of the last successful contact with the server (this PC's clock).</param>
+/// <param name="LastRun">How the most recent print run on this PC ended (not "no job"). Kept only in memory; lets the window say why.</param>
 /// <param name="CannotPrint">Set when this PC must not print at all (its print record cannot be written). Approving is pointless until it clears.</param>
 public sealed record AgentState(
     bool Online, bool NeedsPairing, QueueSnapshot? Queue, Activity? Current, string? Problem, DateTimeOffset? LastPollAt,
-    string? CannotPrint = null);
+    string? CannotPrint = null, RunResult? LastRun = null);
 
 /// <summary>
 /// Keeps the shop PC connected. One request every ~10 s does both heartbeat and queue refresh; approving a job
@@ -30,6 +31,7 @@ public sealed class AgentService
     private readonly Random _rng = new();
     private readonly object _gate = new();
     private AgentState _state = new(false, false, null, null, null, null);
+    private long _polledAt = Environment.TickCount64 - (long)TimeSpan.FromDays(1).TotalMilliseconds;    // when the server was last asked (start or end of a poll)
 
     public event Action<AgentState>? StateChanged;
     public AgentState State => _state;
@@ -59,6 +61,21 @@ public sealed class AgentService
     /// <summary>Ask the loop to poll now (after the shopkeeper approved or resolved something, or the network came back).</summary>
     public void Wake() { try { _wake.Release(); } catch (SemaphoreFullException) { /* already pending */ } }
 
+    /// <summary>Poll now, unless the server was asked less than <paramref name="olderThan"/> ago. For the moments when a
+    /// fresh list is worth one request but nothing has changed on this PC: the window is opened from the tray or brought
+    /// to the front. However often it is called it adds at most one poll per <paramref name="olderThan"/>, and that
+    /// poll takes the place of the next regular one (the 10 s wait starts again after it), so the steady rate is unchanged.</summary>
+    /// <returns>True when a poll was asked for.</returns>
+    public bool WakeIfStale(TimeSpan olderThan)
+    {
+        long now = Environment.TickCount64, last = Interlocked.Read(ref _polledAt);
+        if (now - last < olderThan.TotalMilliseconds) return false;
+        // counted as asked from this moment, not from when the loop gets to it: twenty calls in a row are one request
+        if (Interlocked.CompareExchange(ref _polledAt, now, last) != last) return false;
+        Wake();
+        return true;
+    }
+
     public async Task RunAsync(CancellationToken ct)
     {
         int failures = 0;
@@ -72,7 +89,10 @@ public sealed class AgentService
                 // network dropped during the report) is settled as soon as the server answers again. Never while a
                 // print is running: the attempt in progress is "unreported" too, and must not be settled under it.
                 if (idle) { printing = null; await RecoverAsync(ct); }
-                var snap = await _api.PollAsync(ct);
+                Interlocked.Exchange(ref _polledAt, Environment.TickCount64);
+                QueueSnapshot snap;
+                try { snap = await _api.PollAsync(ct); }
+                finally { Interlocked.Exchange(ref _polledAt, Environment.TickCount64); }
                 failures = 0;
                 Publish(s => s with { Online = true, NeedsPairing = false, Queue = snap, Problem = null, LastPollAt = snap.At });
 
@@ -111,7 +131,7 @@ public sealed class AgentService
     {
         try
         {
-            await _orchestrator.RecoverAsync(ct);
+            await _orchestrator.RecoverAsync(ct, r => Publish(s => s with { LastRun = r }));
             if (_state.CannotPrint is not null) Publish(s => s with { CannotPrint = null });
         }
         catch (Exception e) when (e is not (OperationCanceledException or ApiRejectedException or ServerUnreachableException))
@@ -134,6 +154,7 @@ public sealed class AgentService
                 if (run.Reason == PrintOrchestrator.JournalUnavailable) { Publish(s => s with { CannotPrint = JournalFaultText }); break; }
                 if (run.Kind == RunKind.NoJob) break;
                 ran = true;
+                Publish(s => s with { LastRun = run });
                 Wake();
             }
         }

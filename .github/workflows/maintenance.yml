@@ -21,3 +21,10 @@ jobs:
           code=$(curl -sS -o out.json -w "%{http_code}" -X POST -H "X-Maintenance-Token: $TOKEN" --max-time 60 https://autoprint-v4.vercel.app/v1/internal/maintenance)
           echo "HTTP $code"; cat out.json; echo
           test "$code" = "200"
+          # A file that could not be deleted is counted in documents_failed. The call itself still answers 200 (the
+          # other files were handled), so without this check a file that stays past its deletion time would go unseen.
+          failed=$(python3 -c 'import json; print(json.load(open("out.json"))["documents_failed"])') || { echo "::error::the maintenance answer has no documents_failed number"; exit 1; }
+          if [ "$failed" != "0" ]; then
+            echo "::error::$failed stored file(s) could not be deleted after their retention time. They are tried again on the next run; if this keeps failing, check Supabase Storage."
+            exit 1
+          fi

@@ -2,7 +2,7 @@
 ; Per-user install: no administrator rights, nothing outside the user's own folders.
 
 #ifndef AppVersion
-  #define AppVersion "4.0.1"
+  #define AppVersion "4.0.3"
 #endif
 #ifndef SourceDir
   #error SourceDir must be passed by build.ps1

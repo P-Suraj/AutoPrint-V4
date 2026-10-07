@@ -18,7 +18,9 @@ import re
 from dataclasses import dataclass
 
 MAX_COPIES = 100
-_RANGE_RE = re.compile(r"^\d+(-\d+)?(\s*,\s*\d+(-\d+)?)*$")
+# ASCII digits only (the "\\d" class also matches digits of other scripts, which int() accepts and a print program may
+# not), and the plain space as the only white space: no tabs, no line breaks. The text ends up on a command line.
+_RANGE_RE = re.compile(r"[0-9]{1,6}(-[0-9]{1,6})?( *, *[0-9]{1,6}(-[0-9]{1,6})?)*")
 
 
 class PricingError(ValueError):
@@ -35,14 +37,15 @@ class Price:
     printed_sides: int
     paise_per_side: int
     amount_paise: int
+    page_range: str | None = None      # the range in its one normal form (see normalise_pages); None = every page
 
 
 def parse_page_range(page_range: str | None, page_count: int) -> list[int]:
     """Return the sorted, de-duplicated page numbers selected by a range like '1-3, 5, 8-9'."""
-    if page_range is None or page_range.strip() == "":
+    if page_range is None or page_range.strip(" ") == "":
         return list(range(1, page_count + 1))
-    text = page_range.strip()
-    if not _RANGE_RE.match(text):
+    text = page_range.strip(" ")
+    if not _RANGE_RE.fullmatch(text):
         raise PricingError("Page range must look like 1-5, 8, 11-15", "invalid_page_range")
     pages: set[int] = set()
     for part in text.split(","):
@@ -56,6 +59,24 @@ def parse_page_range(page_range: str | None, page_count: int) -> list[int]:
             raise PricingError(f"Page range must stay between 1 and {page_count}", "invalid_page_range")
         pages.update(range(start, end + 1))
     return sorted(pages)
+
+
+def normalise_pages(pages: list[int]) -> str:
+    """The one way a set of pages is written: ascending, no repeats, no spaces, runs joined: [1, 2, 3, 5] -> '1-3,5'.
+    This, never the customer's own text, is what is stored and handed to the print program, so what is printed is
+    exactly what was priced ('1,1,1' is priced as one page and must print as one page)."""
+    runs: list[str] = []
+    start = prev = None
+    for n in pages:
+        if prev is not None and n == prev + 1:
+            prev = n
+            continue
+        if start is not None:
+            runs.append(str(start) if start == prev else f"{start}-{prev}")
+        start = prev = n
+    if start is not None:
+        runs.append(str(start) if start == prev else f"{start}-{prev}")
+    return ",".join(runs)
 
 
 def validate_rules(rules: dict) -> None:
@@ -94,11 +115,14 @@ def price_job(*, page_count: int, copies: int, color: bool, duplex: bool,
     if page_count < 1:
         raise PricingError("Document has no pages")
     validate_rules(rules)
-    selected = len(parse_page_range(page_range, page_count))
+    pages = parse_page_range(page_range, page_count)
+    selected = len(pages)
+    whole_document = page_range is None or page_range.strip(" ") == ""
     sides = selected * copies
     slabs = rules["color" if color else "bw"]["duplex" if duplex else "simplex"]
     rate = next(s["paise_per_side"] for s in slabs if s["to_sides"] is None or sides <= s["to_sides"])
-    return Price(selected_pages=selected, printed_sides=sides, paise_per_side=rate, amount_paise=sides * rate)
+    return Price(selected_pages=selected, printed_sides=sides, paise_per_side=rate, amount_paise=sides * rate,
+                 page_range=None if whole_document else normalise_pages(pages))
 
 
 def format_rupees(paise: int) -> str:

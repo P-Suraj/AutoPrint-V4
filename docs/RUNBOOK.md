@@ -25,10 +25,10 @@ The database port is blocked from the founder PC, so these tools go through the 
 ## 4. When something goes wrong
 | What you see | Likely cause | Fix |
 |---|---|---|
-| Report shows computer last seen long ago | PC off, asleep, or no internet | Ask the shopkeeper to wake the PC and check the status dot in the tray app (green online, orange offline). It reconnects by itself |
+| Report shows computer last seen long ago | PC off, asleep, or no internet | Ask the shopkeeper to wake the PC and check the status dot at the top of the AutoPrint window (green connected, orange offline). It reconnects by itself |
 | App shows a new pairing code instead of the queue | Credentials were removed or the computer was disconnected on the dashboard | Shopkeeper types the new code on their dashboard |
 | Customer sees "The shop's printer computer looks offline" | App has been offline for 45+ seconds (the customer can still send; the job waits) | As above |
-| Customer sees "This shop is not taking orders right now" | The shop is switched off | `PY scripts/ap_remote.py shop-on ABC123` (and `shop-off ABC123` to stop taking orders; nothing is deleted, jobs already sent still print, and the shopkeeper's dashboard link stops working while it is off). **Not yet run live** |
+| Customer sees "This shop is not taking orders right now" | The shop is switched off, or (after migration 0018) it already has 150 jobs waiting for approval: look at the report; the waiting jobs expire by themselves an hour after they were sent | If it is switched off: `PY scripts/ap_remote.py shop-on ABC123` (and `shop-off ABC123` to stop taking orders; nothing is deleted, jobs already sent still print, and the shopkeeper's dashboard link stops working while it is off). **Not yet run live** |
 | Shop name or prices are wrong | | `rename ABC123 "New name"`; `prices ABC123` shows the current prices; `set-rates` publishes new ones. **Not yet run live** |
 | A request answers "try again" (503) | The database or file storage had a hiccup | It is safe to retry; the apps do. If it lasts, check `https://autoprint-v4.vercel.app/health/ready` |
 | Job stuck as `needs_attention` | The app could not confirm the print (queue stuck, printer error, app restarted mid-print) | Check the printer and the Windows print queue; shopkeeper resolves it in the app. The system never reprints by itself |
@@ -41,7 +41,7 @@ The database port is blocked from the founder PC, so these tools go through the 
 - Rules (decision O-5/O-10): drafts 1 hour; submitted orders up to 48 hours; finished orders +24 hours; unapproved jobs expire 1 hour after submit. Documents are deleted from storage with the records.
 - The cleanup runs when a shop app polls (at most once a minute) and from the scheduled workflow `.github/workflows/maintenance.yml` every 15 minutes. **One manual step:** add the repository secret `AUTOPRINT_MAINTENANCE_TOKEN` (the workflow fails loudly until you do).
 - Deletion proven locally by tests and live for the storage cache issue (a deleted file is not readable through an unauthenticated URL). **Not yet verified live:** that a file past its real window is gone and an old signed URL stops working; this needs waiting out a real window.
-- Purge a customer's order on request: `PY scripts/ap_remote.py purge ABC123 K7QD` (shop code, then the 4-character order code the customer sees). It deletes the uploaded files at once and keeps the order record without any file. It is refused while a job is waiting, approved or printing; reject or cancel it first. Tested locally and run live on a finished test order (1 file deleted, repeat deleted 0).
+- Purge a customer's order on request: `PY scripts/ap_remote.py purge ABC123 K7QD` (shop code, then the 4-character order code the customer sees). It deletes the uploaded files at once and keeps the order record without any file. It is refused while a job is waiting, approved or printing; reject or cancel it first. Tested locally and run live on a finished test order (1 file deleted, repeat deleted 0). An order code is reused after its order ends, so one shop can have several orders with the same code in 30 days: only the most recent one is purged, and the command lists every match with its time; add `--which 2` for the one before, and so on (tested locally 7 Oct 2026, **not yet run live**). After migration 0015 a deleted file also loses its name and checksum in the database (the name becomes "deleted file").
 
 ## 6. Reboot and soak
 - Reboot test: **not yet run.** The app starts at sign-in with `--background` (tray, no window) when that option is on.
@@ -51,3 +51,12 @@ The database port is blocked from the founder PC, so these tools go through the 
 - Local `.env` (git-ignored) holds the Supabase and maintenance values. Never paste them in chat or commit them.
 - The maintenance token can run migrations, issue shop logins and read reports. Rotate it by changing the Vercel environment variable and the GitHub secret, then redeploying.
 - Vercel only applies environment changes to new deployments: redeploy after every change.
+
+## 8. After new code goes live: database updates
+The site and the database are updated separately. New code is written to work with the old database, so the order is always: **site first, then the database.**
+1. `PY scripts/ap_remote.py status` says whether the site is up, whether it can reach the database, which database updates (migrations) are applied and which are still PENDING. It changes nothing.
+2. `PY scripts/ap_remote.py migrate` applies the pending ones, in order, each in its own transaction (a failing one changes nothing and stops the run), and lists what it applied. Running it again is safe: it answers "Nothing to apply".
+3. Run `status` again: it must say "Nothing pending".
+4. Send one PDF from `/s/TST001` and approve it in the Windows app, or run `PY e2e/run_live_e2e.py`.
+
+Both commands are tested locally against a scratch database (7 Oct 2026). **Not yet run live.** If `status` warns that the database has updates the live code does not know, an older version of the site is live: redeploy the current one.

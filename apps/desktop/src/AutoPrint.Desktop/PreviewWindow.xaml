@@ -1,6 +1,7 @@
 <Window x:Class="AutoPrint.Desktop.PreviewWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:AutoPrint.Desktop"
         Title="Preview" Width="820" Height="780" MinWidth="640" MinHeight="480"
         WindowStartupLocation="CenterOwner" Background="{StaticResource Bg}" Foreground="{StaticResource Ink}"
         FontFamily="Segoe UI" FontSize="14" UseLayoutRounding="True" SnapsToDevicePixels="True">
@@ -16,7 +17,7 @@
                 </StackPanel>
                 <StackPanel Grid.Column="1" VerticalAlignment="Center">
                     <TextBlock x:Name="Title1" Style="{StaticResource H2}" TextTrimming="CharacterEllipsis"/>
-                    <TextBlock x:Name="Detail" Style="{StaticResource Soft}" Margin="0,2,0,0"/>
+                    <local:Facts x:Name="Detail" Margin="0,2,0,0"/>
                 </StackPanel>
                 <StackPanel Grid.Column="2" Margin="20,0,0,0">
                     <TextBlock Style="{StaticResource Eyebrow}" Text="TO COLLECT" HorizontalAlignment="Right"/>

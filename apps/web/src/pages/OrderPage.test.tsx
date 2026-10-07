@@ -10,7 +10,7 @@ vi.mock("../api", async (original) => {
 
 import { ApiError, api, type Schemas } from "../api";
 import { rememberOrder, saveSecret, savedOrders } from "../store";
-import OrderPage, { POLL_MS, POLL_SLOW_AFTER_MS, POLL_SLOW_MS, RETRY_MAX_MS } from "./OrderPage";
+import OrderPage, { POLL_FAST_MS, POLL_MS,POLL_SLOW_AFTER_MS, POLL_SLOW_MS, RETRY_MAX_MS } from "./OrderPage";
 
 const getOrder = vi.mocked(api.getOrder);
 const ID = "11111111-2222-3333-4444-555555555555";
@@ -55,7 +55,7 @@ describe("order status page", () => {
     getOrder.mockResolvedValueOnce(view("submitted", "approved")).mockResolvedValue(view("closed", "completed"));
     open();
     await tick(0);
-    await tick(POLL_MS);
+    await tick(POLL_FAST_MS);
     expect(screen.getByText("Sent to printer. Collect it at the counter.")).toBeTruthy();
     expect(document.body.textContent?.toLowerCase()).not.toMatch(/\bprinted\b/);         // decision O-8
     const calls = getOrder.mock.calls.length;
@@ -120,6 +120,23 @@ describe("order status page", () => {
     expect(screen.getByText("Sent to printer. Collect it at the counter.")).toBeTruthy();
   });
 
+  it("asks more often between the shop's approval and the result, then goes back to the usual pace", async () => {
+    getOrder.mockResolvedValueOnce(view("submitted", "awaiting_approval")).mockResolvedValueOnce(view("submitted", "approved"))
+      .mockResolvedValueOnce(view("submitted", "printing")).mockResolvedValue(view("submitted", "needs_attention"));
+    open();
+    await tick(0);                                         // 1: waiting for the shop
+    await tick(POLL_FAST_MS);
+    expect(getOrder).toHaveBeenCalledTimes(1);             // not yet: the usual pace while waiting
+    await tick(POLL_MS - POLL_FAST_MS);                    // 2: approved
+    await tick(POLL_FAST_MS);                              // 3: printing
+    await tick(POLL_FAST_MS);                              // 4: a problem at the printer
+    expect(getOrder).toHaveBeenCalledTimes(4);
+    await tick(POLL_FAST_MS);
+    expect(getOrder).toHaveBeenCalledTimes(4);             // back to the usual pace
+    await tick(POLL_MS - POLL_FAST_MS);
+    expect(getOrder).toHaveBeenCalledTimes(5);
+  });
+
   it("asks less often after a long wait for the shop", async () => {
     getOrder.mockResolvedValue(view("submitted", "awaiting_approval"));
     open();
@@ -147,5 +164,25 @@ describe("order status page", () => {
     await tick(0);
     expect(screen.getByText(/can only be opened in the browser where it was started/)).toBeTruthy();
     expect(getOrder).not.toHaveBeenCalled();
+  });
+
+  it("asks for money and for the code only while there is something to collect", async () => {
+    const asks = () => [screen.queryByText(/pay at the counter/) !== null, screen.queryByText("Say this code at the counter") !== null];
+    getOrder.mockResolvedValue(view("submitted", "awaiting_approval"));
+    open();
+    await tick(0);
+    expect(asks()).toEqual([true, true]);
+    cleanup();
+    for (const [order, job] of [["cancelled", "cancelled"], ["expired", "expired"], ["closed", "rejected"]] as const) {
+      getOrder.mockResolvedValue(view(order, job));
+      open();
+      await tick(0);
+      expect(asks()).toEqual([false, false]);
+      cleanup();
+    }
+    getOrder.mockResolvedValue(view("closed", "failed"));          // "ask at the counter": the code still helps, the price does not
+    open();
+    await tick(0);
+    expect(asks()).toEqual([false, true]);
   });
 });

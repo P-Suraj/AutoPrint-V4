@@ -4,7 +4,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { ApiError, api, uploadPdf, type Schemas } from "../api";
 import { estimate, rupees, type Options, type Rates } from "../estimate";
 import { YourOrders } from "../orders";
-import { PdfPreview, inspectPdf } from "../preview";
+import { PDF_PROBLEM, PdfPreview, inspectPdf, warmPdfReader, warmPdfReaderWhenIdle, type PdfProblem } from "../preview";
 import { clearDraft, loadDraft, loadSecret, rememberOrder, saveDraft, saveSecret } from "../store";
 import { rememberShop } from "../shopCode";
 import { Icon, Segmented, Stepper, Steps, TopBar, fileSize } from "../ui";
@@ -45,6 +45,7 @@ function ShopFlow({ shopCode }: { shopCode: string }) {
   const [loadError, setLoadError] = useState<LoadError | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [file, setFile] = useState<File | null>(null);
+  const [unprintable, setUnprintable] = useState<PdfProblem | null>(null);   // the chosen file cannot be printed: say why, offer nothing else
   const [busy, setBusy] = useState<string | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -68,6 +69,14 @@ function ShopFlow({ shopCode }: { shopCode: string }) {
       .catch((e) => alive && setLoadError({ message: message(e), retry: code(e) !== "shop_not_found" }));
     return () => { alive = false; };
   }, [shopCode, attempt]);
+
+  // Once the first screen is up and a file is about to be chosen, fetch the PDF reader in the background (see preview.tsx).
+  const awaitingFile = !!shop?.accepting_orders && !up;
+  useEffect(() => (awaitingFile ? warmPdfReaderWhenIdle() : undefined), [awaitingFile]);
+
+  // A message must be seen: on a short phone it can appear below the screen, or behind the price bar.
+  const alertAt = useRef<HTMLParagraphElement>(null);
+  useEffect(() => { alertAt.current?.scrollIntoView?.({ block: "nearest" }); }, [error, unprintable]);
 
   function startOver(why: string | null) {
     clearDraft(); draft.current = null;
@@ -99,11 +108,12 @@ function ShopFlow({ shopCode }: { shopCode: string }) {
   const priceWith = (change: Partial<Options>): string | undefined => {
     if (!up || !rates) return undefined;
     const e = estimate(up.pageCount, { ...opts, ...change }, rates);
-    return e.ok ? rupees(e.amountPaise) : undefined;
+    // while the page range or the copies cannot be priced, the line under each choice stays (empty), so nothing jumps under the thumb that is typing
+    return e.ok ? rupees(e.amountPaise) : String.fromCharCode(160);   // a no-break space
   };
 
   function choose(f: File | null) {
-    setError(null); setUp(null); setQuote(null); setFile(null);
+    setError(null); setUp(null); setQuote(null); setFile(null); setUnprintable(null);
     if (!f) return;
     if (f.type !== "application/pdf" && !f.name.toLowerCase().endsWith(".pdf")) { setError("Only PDF files can be printed."); return; }
     if (f.size === 0) { setError("This file is empty. Choose another PDF."); return; }
@@ -130,8 +140,7 @@ function ShopFlow({ shopCode }: { shopCode: string }) {
   const upload = () => step("Checking your file…", async () => {
     if (!file) return;
     const seen = await inspectPdf(file);
-    if (seen.kind === "encrypted") throw new ApiError("pdf_encrypted", "This PDF is password-protected. Remove the password and try again.");
-    if (seen.kind === "invalid") throw new ApiError("pdf_unreadable", "This PDF could not be read. Try saving or exporting it again.");
+    if (seen.kind === "encrypted" || seen.kind === "invalid") { setUnprintable(seen.kind); return; }
     // ("unknown" goes on: this browser could not read PDFs at all, and the server checks every file anyway.)
     // One order per visit: trying again after a failed upload reuses it instead of starting (and counting) a new one.
     const doc = { file_name: file.name.slice(0, 255), byte_size: file.size, content_type: "application/pdf" };
@@ -211,16 +220,16 @@ function ShopFlow({ shopCode }: { shopCode: string }) {
       {!up && (
         <section className="rise">
           <label className={`drop${file ? " has" : ""}${dragging ? " over" : ""}`}
-                 onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={drop}>
+                 onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={drop} onPointerDown={warmPdfReader}>
             <input type="file" accept="application/pdf,.pdf" aria-label="Choose a PDF to print" onChange={(e) => choose(e.target.files?.[0] ?? null)} disabled={!!busy} />
             <span className="drop-icon">{file ? <Icon.file size={28} /> : <Icon.upload size={28} />}</span>
             {file
               ? <><strong className="ellipsis">{file.name}</strong><small>{fileSize(file.size)} · tap to choose another</small></>
               : <><strong>Choose a PDF</strong><small>Tap to pick a file from your phone</small></>}
           </label>
-          {error && <p role="alert" className="error">{error}</p>}
-          {file && <PdfPreview file={file} />}
-          {file && (
+          {(error || unprintable) && <p ref={alertAt} role="alert" className="error">{error ?? PDF_PROBLEM[unprintable!]}</p>}
+          {file && !unprintable && <PdfPreview file={file} onProblem={setUnprintable} />}
+          {file && !unprintable && (
             <button className="primary big" onClick={upload} disabled={!!busy}>
               {busy ? <><i className="spinner" />{busy}{percent !== null && percent < 100 ? ` ${percent}%` : ""}</> : <>Continue<Icon.arrow size={20} /></>}
             </button>
@@ -266,7 +275,7 @@ function ShopFlow({ shopCode }: { shopCode: string }) {
             )}
           </fieldset>
 
-          {error && <p role="alert" className="error">{error}</p>}
+          {error && <p ref={alertAt} role="alert" className="error">{error}</p>}
 
           <div className="bar">
             {!quote ? (

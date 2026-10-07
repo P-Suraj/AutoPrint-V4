@@ -7,7 +7,9 @@ import { ApiError, shopApi, shopAuth, type Schemas } from "../api";
 import { Icon, TopBar, timeAgo } from "../ui";
 
 const KEY = "ap_shop_key";
-const ONLINE_WITHIN_MS = 60_000;          // the app polls every 10 s; a minute of silence means it is not running
+// The same limit the server uses when it tells customers a shop is offline (agent_online_seconds, 45 by default):
+// the shopkeeper and the customer must not be told different things about the same computer.
+const ONLINE_WITHIN_MS = 45_000;
 const REFRESH_MS = 10_000;
 
 function readKey(): string | null {
@@ -205,7 +207,7 @@ function Dashboard({ shopKey: key, onSignOut }: { shopKey: string; onSignOut: ()
 
       {devices === null ? <div className="skeleton block" /> : (
         <section className={`status-hero ${online ? "ok" : active.length ? "warn" : "new"} rise`} role="status">
-          <span className={`art ${online ? "done" : active.length ? "bad" : "wait"}`}>{online ? <Icon.check size={34} /> : active.length ? <Icon.alert size={30} /> : <Icon.monitor size={30} />}</span>
+          <span className={`art ${online ? "done" : active.length ? "hold" : "wait"}`}>{online ? <Icon.check size={34} /> : active.length ? <Icon.alert size={30} /> : <Icon.monitor size={30} />}</span>
           <div>
             {online ? <><h2>Your shop is open for prints</h2><p>The shop computer is connected. New print requests appear in the AutoPrint app there, where you approve them.</p></>
               : active.length ? <><h2>Your shop computer is offline</h2><p>Customers can still send files; they wait until the computer is on. Check that it is switched on, online and that AutoPrint is running.</p></>

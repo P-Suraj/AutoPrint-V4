@@ -10,7 +10,10 @@ import { Icon, TopBar } from "../ui";
 const FINAL = new Set(["closed", "cancelled", "expired"]);
 // How often the server is asked. Quick while something is about to happen; slower once the customer has been
 // waiting for the shop for a while (an approval can take many minutes and each question costs a server call).
+// Quickest between the shop's approval and the result: that part lasts a few seconds, so it is a handful of extra
+// questions per order, and it is when the customer is standing at the counter watching the page.
 export const POLL_MS = 4000;
+export const POLL_FAST_MS = 2000;
 export const POLL_SLOW_MS = 8000;
 export const POLL_SLOW_AFTER_MS = 120_000;
 export const RETRY_MAX_MS = 30_000;
@@ -20,9 +23,11 @@ type JobStatus = Schemas["OrderJobView"]["status"];
 // How many steps of the happy path are behind a job. Other states (declined, cancelled, a problem) have no place on the track.
 const STEPS_DONE: Partial<Record<JobStatus, number>> = { awaiting_approval: 1, approved: 2, printing: 2, completed: 4 };
 const TRACK = ["Sent", "Approved", "Printer", "Collect"];
-const TONE: Record<JobStatus, "wait" | "go" | "done" | "bad" | "off"> = {
+// "hold" is a print the shop is looking at (nothing has gone wrong yet): amber. "bad" is one that could not be made: red.
+// The mark and the words of a card always share the one colour of its tone.
+const TONE: Record<JobStatus, "wait" | "go" | "done" | "hold" | "bad" | "off"> = {
   awaiting_approval: "wait", approved: "go", printing: "go", completed: "done",
-  failed: "bad", needs_attention: "bad", rejected: "off", cancelled: "off", expired: "off",
+  failed: "bad", needs_attention: "hold", rejected: "off", cancelled: "off", expired: "off",
 };
 
 function StatusArt({ status }: { status: JobStatus }) {
@@ -32,7 +37,7 @@ function StatusArt({ status }: { status: JobStatus }) {
       {status === "completed" ? <Icon.check size={34} />
         : status === "awaiting_approval" ? <Icon.clock size={32} />
         : status === "approved" || status === "printing" ? <><Icon.printer size={32} /><i className="sheet" /></>
-        : tone === "bad" ? <Icon.alert size={32} /> : <Icon.x size={30} />}
+        : tone === "bad" || tone === "hold" ? <Icon.alert size={32} /> : <Icon.x size={30} />}
     </span>
   );
 }
@@ -96,7 +101,8 @@ export default function OrderPage() {
       finished.current = FINAL.has(o.status);
       if (!finished.current) {
         const waitingForShop = o.jobs.every((j) => j.status === "awaiting_approval");
-        next(waitingForShop && Date.now() - started.current > POLL_SLOW_AFTER_MS ? POLL_SLOW_MS : POLL_MS);
+        const atThePrinter = o.jobs.some((j) => j.status === "approved" || j.status === "printing");
+        next(atThePrinter ? POLL_FAST_MS : waitingForShop && Date.now() - started.current > POLL_SLOW_AFTER_MS ? POLL_SLOW_MS : POLL_MS);
       }
     } catch (e) {
       if (mine !== run.current) return;
@@ -155,13 +161,17 @@ export default function OrderPage() {
   }
 
   const live = !FINAL.has(order.status);
+  // Declined, cancelled or run out of time: there is nothing to collect, so no code to say and nothing to pay.
+  // A print the shop could not make keeps its code (the customer is sent to the counter) but asks for no money.
+  const calledOff = order.jobs.length > 0 && order.jobs.every((j) => TONE[j.status] === "off");
+  const nothingToPay = calledOff || (order.jobs.length > 0 && order.jobs.every((j) => TONE[j.status] === "off" || j.status === "failed"));
   return (
     <main>
       <TopBar />
       <header className={`ticket${allDone ? " done" : ""}`}>
         <p className="eyebrow">{order.shop_name}</p>
         <h1>Order <span className="code">{order.short_code}</span></h1>
-        <p className="ticket-hint">Say this code at the counter</p>
+        {!calledOff && <p className="ticket-hint">Say this code at the counter</p>}
       </header>
       {stale && <p className="note" role="status">Updates are delayed. Check your connection; this page keeps trying by itself.</p>}
       {order.jobs.length === 0 && <p className="note">This order has not been sent to the shop yet.</p>}
@@ -169,7 +179,7 @@ export default function OrderPage() {
         {order.jobs.map((j) => <Job key={j.job_id} status={j.status} message={j.customer_message} name={j.document_name} />)}
       </ul>
       <div className="order-foot">
-        {order.amount_paise != null && <p className="pay"><strong>{rupees(order.amount_paise)}</strong> · pay at the counter</p>}
+        {order.amount_paise != null && !nothingToPay && <p className="pay"><strong>{rupees(order.amount_paise)}</strong> · pay at the counter</p>}
         {order.status === "submitted" && order.approval_expires_at && order.jobs.some((j) => j.status === "awaiting_approval") && <p className="meta">The shop has until {new Date(order.approval_expires_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} to approve this.</p>}
         {live && <p className="meta live"><i className="dot" />This page updates by itself. You can keep it open.</p>}
         {order.can_cancel && <button className="link danger" onClick={cancel} disabled={cancelling}>{cancelling ? "Cancelling…" : "Cancel this print"}</button>}
