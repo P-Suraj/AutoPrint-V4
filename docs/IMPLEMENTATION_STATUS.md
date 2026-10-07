@@ -289,3 +289,23 @@ Findings:
 - The three small desktop edits made after the agent's last real-spooler run are now covered: the 166 real-spooler tests and the 61-step run were repeated on the final code.
 
 Still not verified on this branch: anything on the live site or live database; a physical printer; WebKit; real phones; the "Test the colour printer" button on a real printer; the items the agents listed as "changed, no dedicated test" (see the handover) unless a later section says otherwise.
+
+## Website: WebKit, small phones and load numbers (7 October 2026, local only)
+
+- **WebKit:** `E2E_ENGINE=webkit apps/api/.venv/Scripts/python.exe e2e/run_web_e2e.py`: 17 of 17 passed (Playwright WebKit, iPhone 13 profile; not a real iPhone).
+- **Small phones:** `E2E_TOOL=walk E2E_OUT=<folder>` through the same runner: "no layout findings" at 320, 360 and 412 px over screens 01 to 34, 40 and 45. Six of the combined pictures were looked at (shop page, 300 pages x 100 copies, price and send, waiting, completed, needs attention): nothing cut off, the long file name is shortened with an ellipsis, Rs 3,00,000 fits. Not looked at: the other pictures; the shop dashboard screens 35 to 44 were not captured (they need `E2E_SHOP_KEY`).
+- **Finding, fixed: the production build served by `vite preview` showed a blank page.** A `compressedPreview` plugin added on 6 Oct in `apps/web/vite.config.ts` compressed the scripts a second time (the preview server already compresses), so the browser could not read them. It only affected local preview, never the live site (Vercel does not use it). The plugin was removed. Before the fix the perf tool timed out on all 3 measurements.
+- `e2e/run_web_e2e.py` now builds and serves the production build when `E2E_TOOL=perf`.
+- **Load numbers** (`E2E_TOOL=perf E2E_CHANNEL=msedge ...run_web_e2e.py`, production build with the host's headers, local API; "slow phone" = 400 ms delay, 400 kbit/s, processor 4 times slower). One run; other work was starting on the PC near its end, so treat as approximate:
+
+| | Fast connection | Slow phone |
+|---|---|---|
+| Home, first view | 80.8 KB downloaded; first paint 456 ms | first paint 1.2 s, first content 2.9 s, usable 3.2 s, longest task 162 ms |
+| Shop page, first view | 81.7 KB; first paint 76 ms | first paint 1.2 s, first content 2.8 s, usable 3.4 s, longest task 102 ms |
+| File chosen to preview drawn | 235 ms (downloads pdf.js, 121 KB) | **11.9 s** |
+| Continue: upload and check (3-page file) | 420 ms | 2.8 s |
+| Send to status shown | 110 ms | 1.6 s |
+| Layout shift | 0 | 0.0005 (the spinner) |
+
+- **Open:** on the slow profile the preview takes 11.9 s after a file is chosen (pdf.js and its 1.4 MB worker are downloaded then). Whether the customer can press Continue before the preview is drawn was not checked here; handed to the website work of the same day.
+- **Changed, see the next section for test results:** the status page asks every 2 s while a job is approved or printing (was 4 s), so the result shows up to 2 s sooner at the counter; a handful of extra calls per order.
