@@ -3,7 +3,7 @@
 Use a test shop (`TST001`). Nothing here touches V3. Allow about 15 minutes.
 
 ## What you need
-- `dist\AutoPrintSetup-4.0.1.exe` (59 MB). Rebuild with `powershell -ExecutionPolicy Bypass -File apps\desktop\installer\build.ps1`.
+- `dist\AutoPrintSetup-4.0.2.exe` (about 59 MB). Rebuild with `powershell -ExecutionPolicy Bypass -File apps\desktop\installer\build.ps1 -Version 4.0.2`.
 - `dist\SHOP_LINK.txt`: your private dashboard link for TST001. Keep it private; anyone with it can manage that shop. Revoke it any time through the founder endpoint (label `founder-test`).
 - A printer. The virtual printer `AutoPrint-Spike-PDF` makes a file, not paper. The Kyocera is the real test but is **not certified yet**: use it only for trial pages.
 
@@ -21,6 +21,17 @@ Use a test shop (`TST001`). Nothing here touches V3. Allow about 15 minutes.
 2. Pick a PDF, choose options, submit.
 3. In the app a card appears (and a tray notification). Press **Preview** to see the pages, then **Approve and print**.
 4. The customer page should move to "printing" and then "Sent to printer".
+
+## What is new in 4.0.2
+- **Printers that make a file instead of paper** ("Microsoft Print to PDF", XPS, Fax, OneNote) are marked "no paper" in Settings, are never chosen by default, and a banner at the top says so if one is chosen. This is what made order BLS3 fail on 6 October: the app was set to Microsoft Print to PDF, which opens a Save window and waits. **First thing to do: open Settings and choose the real printer.**
+- A print that fails now says why in plain words on its card (printer off, nothing reached the print queue, the file is gone, and so on). The words are kept until the app is closed.
+- **"Print again" can no longer print twice by accident.** If the earlier job is still waiting in the Windows print queue (paper ran out, printer was off), the app says so and offers: remove it and print again, keep both, or go back.
+- A job this computer is printing shows "Printing now" at once.
+- A page range that is not plain digits, commas and hyphens is refused before anything is downloaded.
+- Settings has **Test the colour printer** when a colour printer is chosen.
+- Requests that were already waiting when the app starts make no sound; if they are still waiting after 2 minutes there is one reminder. **Tell me if you would rather hear them at once.**
+
+**Not yet tried on a real printer or a real screen:** the "Test the colour printer" button, the taskbar flash, removing a job that is stuck at a switched-off printer, and the Save window case itself. Checked on 7 October only by the automatic tests (166 with the Windows print queue on the virtual printer) and the app's own 61-step run with made-up data.
 
 ## What is new in 4.0.1
 - Each request shows the order code large (the customer says it at the counter), the amount to collect, sides and sheets, how long it has waited and when it expires.
