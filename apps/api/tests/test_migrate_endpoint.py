@@ -12,16 +12,15 @@ from dbtools import MIGRATIONS, build_database, drop_database
 
 def test_migrate_applies_pending_files_once_and_is_idempotent(tmp_path):
     # a database that has everything except the newest migration, as the live one did before it was applied.
-    # Newest is 0020 (shop settings): take away what it adds so the migration has something to create.
+    # Newest is 0021 (files deleted when done): take away what it adds so the migration has something to create.
     newest = MIGRATIONS[-1].stem
-    assert newest == "0020_shop_settings", "update this test when a newer migration is added"
+    assert newest == "0021_delete_files_when_done", "update this test when a newer migration is added"
     name = "v4_mig_" + uuid.uuid4().hex[:8]
     url = build_database(name)
     c = psycopg2.connect(url); c.autocommit = True
     cur = c.cursor()
-    cur.execute("DROP FUNCTION ap.shop_settings_update(text, text, boolean, jsonb)")
-    cur.execute("DROP FUNCTION ap.shop_settings(text)")
-    cur.execute("ALTER TABLE ap.shops DROP COLUMN color_enabled")
+    cur.execute("DROP TRIGGER jobs_refresh_retention ON ap.jobs")
+    cur.execute("DROP FUNCTION ap.jobs_refresh_retention()")
     cur.execute("CREATE TABLE ap.schema_migrations (id text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())")
     for f in MIGRATIONS[:-1]:
         cur.execute("INSERT INTO ap.schema_migrations (id) VALUES (%s)", (f.stem,))
@@ -36,7 +35,7 @@ def test_migrate_applies_pending_files_once_and_is_idempotent(tmp_path):
             assert ok.json()["applied_now"] == [newest]
             again = client.post("/v1/internal/migrate", headers={"X-Maintenance-Token": "m" * 40}).json()
             assert again["applied_now"] == [] and again["applied_total"][-1] == newest
-        cur.execute("SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = %s AND p.proname = %s", ("ap", "shop_settings"))
+        cur.execute("SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = %s AND p.proname = %s", ("ap", "jobs_refresh_retention"))
         assert cur.fetchone()[0] == 1                                             # and the migration really created the function
     finally:
         c.close()
