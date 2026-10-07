@@ -128,3 +128,5 @@ Built: the shopkeeper sets name, prices and colour on or off on the dashboard (m
 **Update, 7 October night:** step 1 above is DONE (`main` at merge commit `15f13f5` is deployed; the live shop lookup shows `color_available`). Steps 2 to 5 are still to do, starting with `PY scripts\ap_remote.py migrate`.
 
 **Update:** step 2 is DONE too (founder ran `migrate` and `status` on 7 October, 08:57 UTC: 20 applied, nothing pending). Next: step 3 (publish the GitHub release with `dist\AutoPrintSetup.exe`), then steps 4 and 5.
+
+**Update, 7 October night (2):** Windows app is now **4.0.6** (`dist\AutoPrintSetup-4.0.6.exe`; one card per order with "View files", decision H-7). Wherever the steps above say 4.0.5, use 4.0.6: release tag `v4.0.6`, attach `dist\AutoPrintSetup.exe`. The app runs on Windows 10 (1903+) and 11, 64-bit, not on Windows 7 (H-8).

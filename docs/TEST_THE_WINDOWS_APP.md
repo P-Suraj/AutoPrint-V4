@@ -3,7 +3,7 @@
 Use a test shop (`TST001`). Nothing here touches V3. Allow about 15 minutes.
 
 ## What you need
-- `dist\AutoPrintSetup-4.0.5.exe` (about 59 MB; `dist\AutoPrintSetup.exe` is the same file under the fixed name the shop dashboard's download link uses). Rebuild with `powershell -ExecutionPolicy Bypass -File apps\desktop\installer\build.ps1 -Version 4.0.5`.
+- `dist\AutoPrintSetup-4.0.6.exe` (about 59 MB; `dist\AutoPrintSetup.exe` is the same file under the fixed name the shop dashboard's download link uses). Rebuild with `powershell -ExecutionPolicy Bypass -File apps\desktop\installer\build.ps1 -Version 4.0.6`.
 - `dist\SHOP_LINK.txt`: your private dashboard link for TST001. Keep it private; anyone with it can manage that shop. Revoke it any time through the founder endpoint (label `founder-test`).
 - A printer. The virtual printer `AutoPrint-Spike-PDF` makes a file, not paper. The Kyocera is the real test but is **not certified yet**: use it only for trial pages.
 
@@ -21,6 +21,13 @@ Use a test shop (`TST001`). Nothing here touches V3. Allow about 15 minutes.
 2. Pick a PDF, choose options, submit.
 3. In the app a card appears (and a tray notification). Press **Preview** to see the pages, then **Approve and print**.
 4. The customer page should move to "printing" and then "Sent to printer".
+
+## What is new in 4.0.6 (7 October)
+In `AutoPrintSetup-4.0.6.exe` (SHA-256 `0f762c694ab6aac9deabf76416f4c8ee3ad5ef28c0b2b92601d1e95db8fd053f`). Not installed anywhere yet. It replaces 4.0.5, which was never installed.
+- **One card for an order with several files.** When a customer sends several files in one order and two or more are waiting, they are one card: the order code, "3 files from one customer", the sides in all, and what to collect for the files on the card. **Approve and print all** and **Reject all** answer every file. **View files** opens the list: each file has its own Reject, Preview and Approve, so one can be rejected and the rest printed. When only one file of the order is still waiting it goes back to an ordinary card that says "One of 3 files in this order".
+- Every file is still printed and reported by itself; nothing about printing changed. Files that are printing or need attention keep their own cards.
+
+Checked on 7 October: `dotnet test apps/desktop/tests/AutoPrint.Core.Tests`: 172 passed, 7 skipped; the app's own pictures (`--selftest-ui`, exit 0), looked at: the closed order card, the opened one at 906 px and at the smallest window. **Not tried:** pressing the buttons against a real server (the pictures use made-up data and nothing was clicked), a real several-file order, a real screen, installing over 4.0.4.
 
 ## What is new in 4.0.5 (7 October)
 These are in `AutoPrintSetup-4.0.5.exe` (SHA-256 `52a9bc6ac062414c42490b7092b2f5305146a0c2d01f87f26db36cf5d71285dc`). Not installed anywhere yet.

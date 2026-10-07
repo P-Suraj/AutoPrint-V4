@@ -129,6 +129,7 @@ internal static partial class SelfTest
             ("27-requests-search", () => MainWith(w => w.Demo(Shop, State(true, [W1, W2, .. Many, N1, .. Done]), Fine, search: "g5lt"))),
             ("28-requests-search-no-match", () => MainWith(w => w.Demo(Shop, State(true, [W1, W2, .. Many, .. Done]), Fine, search: "K7QA"))),
             ("29-order-with-several-files", () => MainWith(w => w.Demo(Shop, State(true, [W1, .. Many]), Fine))),
+            ("30-order-files-shown", () => MainWith(w => w.Demo(Shop, State(true, [W1, .. Many]), Fine, openOrder: "G5LT"))),
             ("16-preview",() => new PreviewWindow(W2, null, null, null, TestPage.Build("AutoPrint preview self-test", "Made-up page. No customer document is used."))),
         };
         foreach (var (name, make) in scenes)
