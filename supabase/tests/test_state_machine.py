@@ -362,7 +362,7 @@ def test_abandoned_draft_expires_and_its_documents_are_due_for_deletion(shop, db
 
 
 def test_retention_windows_follow_the_decision(shop, db):
-    # draft: 1 hour; submitted: hard cap; final: 24 hours, never beyond the hard cap
+    # draft: 1 hour; submitted: hard cap; a file whose job can never print again: at once (migration 0021)
     o = db.call("create_order", shop.code, sha(uuid.uuid4().hex))
     d = db.call("register_document", o["order_id"], "x.pdf", 100, f"k/{uuid.uuid4().hex}")
     hrs = lambda: db.one("SELECT extract(epoch FROM (delete_after - created_at))/3600 FROM ap.documents WHERE id=%s", (d["document_id"],))
@@ -374,7 +374,33 @@ def test_retention_windows_follow_the_decision(shop, db):
     assert abs(cap - 48) < 0.01
     db.call("cancel_order", order["order_id"])
     after = db.one("SELECT extract(epoch FROM (delete_after - now()))/3600 FROM ap.documents WHERE id=%s", (doc,))
-    assert 23.9 < after <= 24.01
+    assert -0.01 < after <= 0
+    assert str(doc) in [str(r[0]) for r in db.rows("SELECT document_id FROM ap.documents_due_for_deletion(1000)")]
+
+
+def test_each_file_is_deleted_when_its_own_job_is_done_and_kept_while_it_can_still_print(shop, db):
+    """Migration 0021. Three files in one order: one rejected, one that did not go through, one still waiting."""
+    order = shop.submitted_order(pages=(1, 2, 3))
+    device = shop.device()
+    by_doc = {str(d): str(j) for j, d in db.rows("SELECT id, document_id FROM ap.jobs WHERE order_id = %s", (order["order_id"],))}
+    rejected, failed, waiting = [str(d) for d in order["doc_ids"]]
+    left = lambda doc: db.one("SELECT extract(epoch FROM (delete_after - now()))/3600 FROM ap.documents WHERE id=%s", (doc,))
+
+    assert db.call("reject_job", by_doc[rejected], device, None)["result"] == "ok"
+    assert left(rejected) <= 0                      # nothing can print it again: due now, while the order is still open
+    assert 47 < left(waiting) <= 48                 # the others are untouched
+
+    assert db.call("approve_job", by_doc[failed], device)["result"] == "ok"
+    claim = db.call("claim_next_job", device, 300)
+    assert claim["result"] == "claimed" and str(claim["job_id"]) == by_doc[failed]
+    out = db.call("report_outcome", claim["attempt_id"], claim["attempt_token"], device, "failed", {"reason": "test", "printed": False})
+    assert out["result"] == "ok"
+    assert 23.9 < left(failed) <= 24.01             # kept a day: the shopkeeper can press "Print again"
+    assert 47 < left(waiting) <= 48
+
+    # "Print again" on the failed one: it is wanted again, so it is kept like any waiting file
+    assert db.call("resolve_job", by_doc[failed], device, "retry", None)["result"] == "ok"
+    assert 47 < left(failed) <= 48
 
 
 def test_order_secret_stops_working_after_hard_cap(shop, db):
