@@ -124,3 +124,5 @@ Built: the shopkeeper sets name, prices and colour on or off on the dashboard (m
 - The first browser test of `e2e/run_web_e2e.py` fails on a cold start on `main` as well; the rest pass. Do not chase it as a regression.
 - `test_migrate_endpoint.py` now names `0020_shop_settings`; `test_review_fixes.py` applies the two newest migrations twice, so a new migration must be safe to run twice.
 - Three forked sub-agents with separate files worked without clashes. `store.ts`, `api.ts` and `styles.css` are shared by the customer page and the dashboard: give each file to one owner.
+
+**Update, 7 October night:** step 1 above is DONE (`main` at merge commit `15f13f5` is deployed; the live shop lookup shows `color_available`). Steps 2 to 5 are still to do, starting with `PY scripts\ap_remote.py migrate`.

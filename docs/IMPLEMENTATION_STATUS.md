@@ -474,3 +474,7 @@ Branch `wip/2026-10-07-shop-settings-multi-file`. **Nothing here is deployed, mi
 - Dashboard: unsaved price edits are lost without a warning when the page is left; a failed load says "Could not load your prices" whatever the cause.
 - The first browser test of a rig run fails on a cold start (see above).
 - Colour on or off is not offered in the Windows app's printer choice (G-9).
+
+## Deployed: the founder feedback build (7 October 2026, night)
+
+On the founder word "deploy": `wip/2026-10-07-shop-settings-multi-file` merged into `main` (merge commit `15f13f5`) and pushed. **Seen live:** `GET https://autoprint-v4.vercel.app/v1/shops/TST001` answered with the new `color_available: true` about a minute after the push, so the new API is serving, and it runs on the database without migration 0020 as designed. **Not checked live: anything else** (the customer page with several files, the dashboard panel, which cannot load until 0020 is applied, and the download button, which has no release behind it yet). Migration 0020 is NOT applied: only the founder can run `ap_remote.py migrate`.
