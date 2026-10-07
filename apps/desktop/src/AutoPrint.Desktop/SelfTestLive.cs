@@ -176,6 +176,23 @@ internal static partial class SelfTest
         }
     }
 
+    /// <summary>Stands where the print program would be for the test page buttons in Settings: it notes what it was
+    /// asked to print and answers as told. Nothing is printed.</summary>
+    private sealed class TestPageEngine : IPrintEngine
+    {
+        public readonly List<PrintRequest> Asked = [];
+        public volatile TaskCompletionSource? Hold;
+        public volatile SubmitResult Answer = new(true, null);
+        public int Count { get { lock (Asked) return Asked.Count; } }
+
+        public async Task<SubmitResult> SubmitAsync(PrintRequest request, CancellationToken ct)
+        {
+            lock (Asked) Asked.Add(request);
+            if (Hold is { } hold) await hold.Task;
+            return Answer;
+        }
+    }
+
     private sealed class MadeUpDownloader(byte[] pdf) : IDownloader
     {
         public async Task DownloadAsync(string url, string expectedSha256, long expectedBytes, string path, CancellationToken ct)
@@ -388,6 +405,40 @@ internal static partial class SelfTest
         Check("print again: the card leaves and the queue says there is nothing to do", await Until(() => !Says(w.Cards, "LV05") && w.EmptyState.IsVisible, 10));
         Check($"heartbeat: the server was polled throughout ({server.Polls} polls)", server.Polls > pollsBefore + 3);
 
+        // ---- Settings: the two test page buttons, with a made-up print program (the colour one had never been pressed)
+        var pages = new TestPageEngine { Hold = new TaskCompletionSource() };
+        const string colourPrinter = "Canon G3010 colour";
+        var sw = new SettingsWindow(new Settings { BlackWhitePrinter = PrinterName, ColorPrinter = colourPrinter }, Support, Installed)
+        {
+            TestEngine = () => pages, WindowStartupLocation = WindowStartupLocation.Manual, Left = -30000, Top = -30000, ShowInTaskbar = false, ShowActivated = false,
+        };
+        sw.Show(); await Idle(sw);
+        Check("settings: the colour test button is offered when the colour printer is a different machine", sw.TestColorBtn.IsVisible && sw.TestBtn.IsVisible);
+        Click(sw.TestColorBtn); Click(sw.TestColorBtn); Click(sw.TestBtn);     // a double click, then the other button, while the first page is on its way
+        Check("colour test: the page is handed over, and both test buttons are off while it is on its way",
+            await Until(() => pages.Count == 1, 5) && !sw.TestBtn.IsEnabled && !sw.TestColorBtn.IsEnabled && sw.Result.Text.Contains("Sending a test page to the colour printer"));
+        await Task.Delay(500);
+        Check($"colour test: three presses sent exactly one page ({pages.Count})", pages.Count == 1);
+        Check("colour test: it went to the colour printer and to no other, one copy, in colour",
+            pages.Asked[0].Printer == colourPrinter && pages.Asked[0].Options == new PrintOptions(1, true, false, null) && pages.Asked[0].SpoolerJobName.StartsWith("aptest_"));
+        await Shot(sw, "live-11-settings-colour-test-running");
+        pages.Hold.SetResult(); pages.Hold = null;
+        Check("colour test: the result names the colour printer and asks to check the page", await Until(() => sw.Result.Text == $"Sent to the colour printer “{colourPrinter}”. Check that a page came out there." && sw.TestColorBtn.IsEnabled && sw.TestBtn.IsEnabled, 5));
+        await Shot(sw, "live-12-settings-colour-test-sent");
+        pages.Answer = new(false, "exit_code_1");
+        Click(sw.TestColorBtn);
+        Check("colour test: a failure is said in plain words, with no code in it", await Until(() => sw.Result.Text == "It did not work. Check the printer and try again." && sw.TestColorBtn.IsEnabled, 5) && pages.Count == 2);
+        await Shot(sw, "live-13-settings-colour-test-failed");
+        pages.Answer = new(true, null);
+        Click(sw.TestBtn);
+        Check("test page: the first button goes to the main printer, not in colour", await Until(() => pages.Count == 3 && sw.Result.Text.StartsWith("Sent to the printer “" + PrinterName) && sw.TestBtn.IsEnabled, 5)
+            && pages.Asked[2].Printer == PrinterName && !pages.Asked[2].Options.Color);
+        sw.ColorBox.SelectedValue = PrinterName; await Idle(sw);
+        Check("settings: with the same machine chosen for colour there is no second button, and pressing it anyway sends nothing", !sw.TestColorBtn.IsVisible);
+        Click(sw.TestColorBtn); await Task.Delay(300);
+        Check("settings: no page was sent without a separate colour printer", pages.Count == 3 && sw.Result.Text == "Choose a printer first.");
+        sw.Close();
+
         // ---- AutoPrint is opened a second time while it is already running
         string name = @"Local\AutoPrint.V4.SelfTest." + Guid.NewGuid().ToString("N");     // never the real name: a real AutoPrint on this PC is not signalled
         using (var first = new SingleInstance(name))
@@ -397,8 +448,20 @@ internal static partial class SelfTest
             Check("close: the window hides and the app keeps running", first.IsFirst && !w.IsVisible && exits == 0);
             using var second = new SingleInstance(name);
             Check("second launch: it sees that AutoPrint is already running", !second.IsFirst);
+            // wait until just after a regular poll, then long enough for the list to count as old: the next regular poll is then several seconds away
+            int regular = server.Polls;
+            await Until(() => server.Polls > regular, 15);
+            await Task.Delay(3500);
+            int whileHidden = server.Polls;
+            var shown = System.Diagnostics.Stopwatch.StartNew();
             second.AskFirstToShow();
             Check("second launch: the window of the running app comes back", await Until(() => w.IsVisible, 5));
+            bool refreshed = await Until(() => server.Polls > whileHidden, 2);
+            Check($"opened from the tray: the list was refreshed at once ({shown.ElapsedMilliseconds} ms), not at the next regular poll", refreshed);
+            int afterShow = server.Polls;
+            for (int i = 0; i < 5; i++) { w.Hide(); app.ShowWindow(); }
+            await Task.Delay(1500);
+            Check($"opened from the tray: opening it five more times in a row asked the server no more ({server.Polls - afterShow} extra polls)", server.Polls == afterShow);
             w.WindowState = WindowState.Minimized;
             second.AskFirstToShow();
             Check("second launch: a minimised window is restored", await Until(() => w.WindowState == WindowState.Normal, 5));

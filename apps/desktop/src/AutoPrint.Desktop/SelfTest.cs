@@ -22,7 +22,8 @@ namespace AutoPrint.Desktop;
 /// window size, so the screens can be checked without a shop, a printer or a customer. It never reads or writes the
 /// real settings, credentials or journal, never uses the network, never lists or touches a printer, and makes no sound:
 /// everything it needs is in memory, and its log goes under the output folder. "soak" keeps one window open and
-/// reports the CPU and memory it used.
+/// reports the CPU and memory it used, in four parts: a quiet queue, a job printing, the same with the window minimised,
+/// and the quiet queue again.
 /// </summary>
 internal static partial class SelfTest
 {
@@ -190,8 +191,10 @@ internal static partial class SelfTest
         w.Show();
         await Task.Delay(3000);
         log.AppendLine($"animations: {(Motion.On ? "on" : "off")}; render tier {RenderCapability.Tier >> 16}; logical processors {Environment.ProcessorCount}");
-        foreach (var (label, state) in new[] { ("queue, 3 waiting, nothing printing", quiet), ("one job printing (progress line moving)", busy), ("queue again", quiet) })
+        foreach (var (label, state, minimised) in new[] { ("queue, 3 waiting, nothing printing", quiet, false), ("one job printing (progress line moving)", busy, false),
+            ("one job printing, window minimised (progress line at rest)", busy, true), ("queue again", quiet, false) })
         {
+            w.WindowState = minimised ? WindowState.Minimized : WindowState.Normal;
             w.Demo(Shop, state, Fine);
             await Task.Delay(2000);
             GC.Collect(); me.Refresh();

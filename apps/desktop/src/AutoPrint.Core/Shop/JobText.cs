@@ -216,6 +216,9 @@ public sealed record Alert(AlertKind Kind, int Count, string? FirstDocument)
 /// per interval, so there is no alert storm. Requests that were already waiting when the app started are not "new":
 /// the first look is silent (the shopkeeper has just opened the app and sees them), and the reminder follows after
 /// one interval if they are still unanswered.
+/// The reminder ends by itself. It counts only requests that can still be answered: one whose time to approve has run
+/// out is no longer reminded about, and while there is no internet nothing is said at all, because the list on screen is
+/// then an old one and no answer can be sent. So a PC left on overnight without a connection stays quiet.
 /// </summary>
 public sealed class AlertPolicy(TimeSpan? remindEvery = null)
 {
@@ -224,16 +227,21 @@ public sealed class AlertPolicy(TimeSpan? remindEvery = null)
     private DateTimeOffset _last = DateTimeOffset.MinValue;
     private bool _started;
 
-    public Alert Next(IReadOnlyList<JobSummary> jobs, DateTimeOffset now)
+    /// <param name="now">This PC's clock: used only to space the alerts.</param>
+    /// <param name="serverNow">The server's clock carried forward, to tell whether a request can still be approved. Defaults to <paramref name="now"/>.</param>
+    /// <param name="online">False while the server cannot be reached: the list is then not current.</param>
+    public Alert Next(IReadOnlyList<JobSummary> jobs, DateTimeOffset now, DateTimeOffset? serverNow = null, bool online = true)
     {
+        if (!online) return Alert.Nothing;
         var waiting = jobs.Where(j => j.Status == JobStatus.AwaitingApproval).ToList();
-        var fresh = waiting.Where(j => !_seen.Contains(j.JobId)).ToList();
+        var open = waiting.Where(j => j.ApprovalExpiresAt is not { } ends || ends > (serverNow ?? now)).ToList();
+        var fresh = open.Where(j => !_seen.Contains(j.JobId)).ToList();
         _seen.IntersectWith(waiting.Select(j => j.JobId));           // answered requests are forgotten, so this never grows
         foreach (var j in fresh) _seen.Add(j.JobId);
         if (!_started) { _started = true; _last = now; return Alert.Nothing; }
-        if (waiting.Count == 0) return Alert.Nothing;
+        if (open.Count == 0) return Alert.Nothing;
         if (fresh.Count > 0) { _last = now; return new(AlertKind.New, fresh.Count, fresh[^1].DocumentName); }
-        if (now - _last >= _remindEvery || now < _last) { _last = now; return new(AlertKind.Reminder, waiting.Count, null); }
+        if (now - _last >= _remindEvery || now < _last) { _last = now; return new(AlertKind.Reminder, open.Count, null); }
         return Alert.Nothing;
     }
 }

@@ -72,46 +72,39 @@ public partial class SettingsWindow : Window
         ColorWarn.Text = colourPrinter is { IsVirtual: true } v ? PrinterCatalog.Warning(v.Name, true, v.Prompts) + " Colour prints would go there." : "";
         ColorWarn.Visibility = ColorWarn.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         // a second machine gets its own test: shown only when the colour printer really is a different one
-        TestColorBtn.Visibility = ColorBox.SelectedValue is string other && other != Same && other != name ? Visibility.Visible : Visibility.Collapsed;
+        TestColorBtn.Visibility = TestPrint.ColourTarget(ColorBox.SelectedValue as string, name, Same) is not null ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void OnTest(object sender, RoutedEventArgs e) => TestAsync(BwBox.SelectedValue as string, colour: false);
 
     /// <summary>The colour printer is tested on its own: it is a different machine, and the first button says nothing about it.</summary>
-    private void OnTestColour(object sender, RoutedEventArgs e) => TestAsync(ColorBox.SelectedValue is string c && c != Same ? c : null, colour: true);
+    private void OnTestColour(object sender, RoutedEventArgs e) => TestAsync(TestPrint.ColourTarget(ColorBox.SelectedValue as string, BwBox.SelectedValue as string, Same), colour: true);
+
+    /// <summary>The print program a test page is handed to. Replaced only by the self-test, which must never start the real one.</summary>
+    internal Func<IPrintEngine> TestEngine = () => new SumatraEngine(MainWindow.SumatraPath);
+    private TestPrint? _test;
+    private bool _testing;
 
     private async void TestAsync(string? name, bool colour)
     {
+        if (_testing) return;                                              // one page for one press: a double click, or a press on the other button, sends nothing more
         Result.Visibility = Visibility.Visible;
-        if (name is null) { Result.Text = "Choose a printer first."; return; }
+        if (name is null) { Result.Foreground = Ui.Brush("Muted"); Result.Text = "Choose a printer first."; return; }
+        _testing = true;
         bool prompts = _printers.FirstOrDefault(x => x.Name == name) is { Prompts: true };
-        string which = colour ? "the colour printer" : "the printer";
         TestBtn.IsEnabled = TestColorBtn.IsEnabled = false; Result.Foreground = Ui.Brush("Muted");
-        Result.Text = prompts ? "Sending a test page. A window may open on this computer: answer it or close it." : $"Sending a test page to {which}…";
-        var dir = Path.Combine(Settings.Dir, "testpage");                  // its own folder: a customer job cleaning the work folder never touches it
-        var jobName = "aptest_" + Guid.NewGuid().ToString("N");
-        var file = Path.Combine(dir, jobName + ".pdf");
+        Result.Text = prompts ? "Sending a test page. A window may open on this computer: answer it or close it." : $"Sending a test page to {(colour ? "the colour printer" : "the printer")} “{name}”…";
         try
         {
-            var r = await Task.Run(async () =>
-            {
-                Directory.CreateDirectory(dir);
-                await File.WriteAllBytesAsync(file, TestPage.Build("AutoPrint test page", DateTime.Now.ToString("g")));
-                return await new SumatraEngine(MainWindow.SumatraPath).SubmitAsync(new PrintRequest(file, name, new PrintOptions(1, colour, false, null), jobName, 1), CancellationToken.None);
-            });
+            var test = _test ??= new TestPrint(() => TestEngine(), Path.Combine(Settings.Dir, "testpage"));
+            var r = await Task.Run(() => test.SendAsync(name, colour));      // never on the window's thread: the print program can take a while
+            if (r is null) return;                                           // another test page is still on its way
             Result.Foreground = Ui.Brush(r.Accepted ? "Ink" : "Err");
-            Result.Text = r.Accepted ? $"Sent to {which} “{name}”. Check that a page came out there." : r.Error switch
-            {
-                SumatraEngine.NotReadyReason => "AutoPrint's print program is missing or damaged. Install AutoPrint again.",
-                "printer_not_found" => "Windows cannot find this printer any more. Choose another one.",
-                "engine_timeout" => prompts ? "Nothing was printed. This one makes a file and waits for a window to be answered. Choose your real printer."
-                    : "The printer did not take the page. Check that it is switched on and connected, and that no window on this computer is waiting for an answer.",
-                _ => "It did not work. Check the printer and try again.",
-            };
+            Result.Text = TestPrint.Words(r, name, colour, prompts);
             if (!r.Accepted) App.Log("test page: " + r.Error);
         }
-        catch (Exception x) { App.Log("test page: " + SafeText.Describe(x)); Result.Foreground = Ui.Brush("Err"); Result.Text = "It did not work. Check the printer and try again."; }
-        finally { await WorkFiles.DeleteAsync(file); TestBtn.IsEnabled = TestColorBtn.IsEnabled = true; }
+        catch (Exception x) { App.Log("test page: " + SafeText.Describe(x)); Result.Foreground = Ui.Brush("Err"); Result.Text = TestPrint.Unexpected; }
+        finally { _testing = false; TestBtn.IsEnabled = TestColorBtn.IsEnabled = true; }
     }
 
     private void OnHear(object sender, RoutedEventArgs e) => Alerts.Chime();

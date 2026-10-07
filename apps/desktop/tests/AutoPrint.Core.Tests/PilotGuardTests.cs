@@ -421,3 +421,263 @@ public class WaitingJobTests
         Assert.Equal(2, rig.Spooler.RemoveCount);                                           // both of its own jobs, nothing else
     }
 }
+
+/// <summary>Review of 7 October: the reminder for requests that are still waiting must end by itself. Before this, a
+/// shop PC that lost its connection kept an old list on screen and chimed about it every two minutes for as long as
+/// it was left on.</summary>
+public class AlertEndTests
+{
+    private static readonly DateTimeOffset Now = new(2026, 10, 7, 10, 0, 0, TimeSpan.Zero);
+    private static JobSummary Waiting(string code, double expiresInMinutes = 60) =>
+        FakeShopApi.Job(JobStatus.AwaitingApproval, code, created: Now) with { ApprovalExpiresAt = Now.AddMinutes(expiresInMinutes) };
+
+    [Fact]
+    public void The_reminder_is_steady_while_a_request_can_be_answered_and_stops_when_its_hour_is_over()
+    {
+        var policy = new AlertPolicy(TimeSpan.FromMinutes(2));
+        var a = Waiting("AAAA");
+        var reminders = new List<DateTimeOffset>();
+        // three hours of looks, one every 10 s like the poll, with the request never answered and never closed by the server
+        for (var t = Now; t <= Now.AddHours(3); t = t.AddSeconds(10))
+        {
+            var alert = policy.Next([a], t, serverNow: t);
+            Assert.NotEqual(AlertKind.New, alert.Kind);                                      // it was there at start-up: never "new"
+            if (alert.Kind == AlertKind.Reminder) reminders.Add(t);
+        }
+        Assert.Equal(Now.AddMinutes(2), reminders[0]);                                       // the first one two minutes after start-up
+        Assert.Equal(29, reminders.Count);                                                   // every 2 minutes for its hour, then no more
+        Assert.All(reminders, t => Assert.True(t < Now.AddHours(1)));
+    }
+
+    [Fact]
+    public void Without_internet_nothing_is_said_however_long_it_lasts_and_the_reminder_comes_back_with_the_connection()
+    {
+        var policy = new AlertPolicy(TimeSpan.FromMinutes(2));
+        var a = Waiting("AAAA", expiresInMinutes: 24 * 60);
+        Assert.Equal(AlertKind.None, policy.Next([a], Now, Now).Kind);
+        for (var t = Now.AddSeconds(15); t < Now.AddHours(8); t = t.AddSeconds(15))          // a night with the router off: the list on screen is the old one
+            Assert.Equal(AlertKind.None, policy.Next([a], t, t, online: false).Kind);
+        var back = Now.AddHours(8);
+        Assert.Equal(AlertKind.Reminder, policy.Next([a], back, back).Kind);                 // connected again and it is still waiting: say so once
+        Assert.Equal(AlertKind.None, policy.Next([a], back.AddSeconds(10), back.AddSeconds(10)).Kind);
+    }
+
+    [Fact]
+    public void Whether_a_request_can_still_be_answered_is_judged_by_the_servers_clock_not_this_pcs()
+    {
+        var a = Waiting("AAAA");
+        // this PC's clock is three hours fast; the server says ten minutes have passed: it is still waiting, so it reminds
+        var fast = new AlertPolicy(TimeSpan.FromMinutes(2));
+        Assert.Equal(AlertKind.None, fast.Next([a], Now.AddHours(3), Now).Kind);
+        Assert.Equal(AlertKind.Reminder, fast.Next([a], Now.AddHours(3).AddMinutes(10), Now.AddMinutes(10)).Kind);
+        // this PC's clock is right but the server's hour is over: nothing to answer, nothing said
+        var over = new AlertPolicy(TimeSpan.FromMinutes(2));
+        Assert.Equal(AlertKind.None, over.Next([a], Now, Now).Kind);
+        Assert.Equal(AlertKind.None, over.Next([a], Now.AddMinutes(10), Now.AddMinutes(61)).Kind);
+        // a new request beside the expired one is still announced, and counted alone
+        var b = FakeShopApi.Job(JobStatus.AwaitingApproval, "BBBB", "new.pdf") with { ApprovalExpiresAt = Now.AddHours(2) };
+        var alert = over.Next([a, b], Now.AddMinutes(11), Now.AddMinutes(62));
+        Assert.Equal((AlertKind.New, 1, "new.pdf"), (alert.Kind, alert.Count, alert.FirstDocument));
+    }
+}
+
+/// <summary>The shop app asks the server every 10 s, and every request costs money, so the interval stays. What is
+/// free is asking at once at the moments that matter. These tests use a 30 s interval: any poll after the first one
+/// can only have come from a wake-up.</summary>
+public class WakeTests
+{
+    private static AgentService Slow(Rig rig) => new(rig.Api, rig.Orchestrator, TimeSpan.FromSeconds(30));
+
+    [Fact]
+    public async Task Opening_the_window_refreshes_the_list_only_when_it_is_old_and_many_presses_make_one_request()
+    {
+        using var rig = new Rig();
+        rig.Api.NextClaim = null;
+        var agent = Slow(rig);
+        using var cts = new CancellationTokenSource();
+        var run = agent.RunAsync(cts.Token);
+        await Wait.Until(() => rig.Api.PollCount == 1);
+
+        Assert.False(agent.WakeIfStale(TimeSpan.FromMinutes(1)));                             // asked a moment ago: nothing to gain
+        await Task.Delay(300);
+        Assert.Equal(1, rig.Api.PollCount);
+
+        for (int i = 0; i < 20; i++) agent.WakeIfStale(TimeSpan.FromMilliseconds(200));       // the window is opened and brought forward again and again
+        await Wait.Until(() => rig.Api.PollCount == 2);
+        await Task.Delay(300);
+        Assert.Equal(2, rig.Api.PollCount);                                                   // one request, not twenty
+        Assert.False(agent.WakeIfStale(TimeSpan.FromSeconds(30)));                            // and that one counts as fresh
+
+        agent.Wake();                                                                         // an answer was sent, or the network came back: always at once
+        await Wait.Until(() => rig.Api.PollCount == 3);
+        await Task.Delay(300);
+        Assert.Equal(3, rig.Api.PollCount);                                                   // and no faster steady rate afterwards
+        cts.Cancel(); await run;
+    }
+
+    [Fact]
+    public async Task When_a_print_ends_the_queue_is_asked_again_at_once_and_not_in_a_tight_loop()
+    {
+        using var rig = new Rig();
+        var job = FakeShopApi.Job(JobStatus.Approved);
+        rig.Api.OnPoll = _ => rig.Api.NextClaim is null ? FakeShopApi.Queue() : FakeShopApi.Queue(job);
+        var agent = Slow(rig);
+        using var cts = new CancellationTokenSource();
+        var run = agent.RunAsync(cts.Token);
+        await Wait.Until(() => rig.Api.Reports.Count == 1);
+        await Wait.Until(() => rig.Api.PollCount >= 2, 3000);                                 // not 30 s later
+        await Task.Delay(500);
+        Assert.InRange(rig.Api.PollCount, 2, 4);
+        Assert.Equal(1, rig.Spooler.SubmitCount);
+        cts.Cancel(); await run;
+    }
+}
+
+/// <summary>"Print a test page" and "Test the colour printer" in Settings: the colour button had never been pressed.</summary>
+public class TestPrintTests
+{
+    private sealed class ScriptedEngine : IPrintEngine
+    {
+        public readonly List<PrintRequest> Requests = [];
+        public readonly List<bool> FileWasThere = [];
+        public TaskCompletionSource? Hold;
+        public SubmitResult Answer = new(true, null);
+        public Exception? Throw;
+
+        public async Task<SubmitResult> SubmitAsync(PrintRequest request, CancellationToken ct)
+        {
+            lock (Requests) { Requests.Add(request); FileWasThere.Add(File.Exists(request.FilePath)); }
+            if (Hold is { } hold) await hold.Task;
+            if (Throw is { } x) throw x;
+            return Answer;
+        }
+    }
+
+    private static string NewDir() => Path.Combine(Path.GetTempPath(), "ap_test_" + Guid.NewGuid().ToString("N")[..8], "testpage");
+    private static void Remove(string dir) { try { Directory.Delete(Path.GetDirectoryName(dir)!, true); } catch (IOException) { } }
+
+    [Fact]
+    public void The_colour_button_exists_only_for_a_second_machine_and_names_that_machine()
+    {
+        Assert.Equal("Canon colour", TestPrint.ColourTarget("Canon colour", "HP mono", "Same printer"));
+        Assert.Null(TestPrint.ColourTarget("Same printer", "HP mono", "Same printer"));       // no separate colour printer
+        Assert.Null(TestPrint.ColourTarget("HP mono", "HP mono", "Same printer"));            // the same machine chosen twice: the first button tests it
+        Assert.Null(TestPrint.ColourTarget(null, "HP mono", "Same printer"));
+        Assert.Null(TestPrint.ColourTarget("", "HP mono", "Same printer"));
+        Assert.Equal("Canon colour", TestPrint.ColourTarget("Canon colour", null, "Same printer"));
+    }
+
+    [Fact]
+    public async Task One_page_in_colour_goes_to_the_printer_that_was_named_and_its_file_is_gone_afterwards()
+    {
+        var dir = NewDir();
+        try
+        {
+            var engine = new ScriptedEngine();
+            var test = new TestPrint(() => engine, dir);
+            var r = await test.SendAsync("Canon colour", colour: true);
+            Assert.True(r is { Accepted: true });
+            var sent = Assert.Single(engine.Requests);
+            Assert.Equal("Canon colour", sent.Printer);
+            Assert.Equal(new PrintOptions(1, true, false, null), sent.Options);              // one copy, colour, one side, every page of a one-page file
+            Assert.Equal(1, sent.ExpectedPages);
+            Assert.StartsWith("aptest_", sent.SpoolerJobName);                               // never the name of a customer's job
+            Assert.Equal(dir, Path.GetDirectoryName(sent.FilePath));                         // never in the folder customer documents use
+            Assert.True(engine.FileWasThere.Single());
+            Assert.False(File.Exists(sent.FilePath));
+            Assert.False(test.Running);
+
+            await test.SendAsync("HP mono", colour: false);
+            Assert.Equal(("HP mono", false), (engine.Requests[1].Printer, engine.Requests[1].Options.Color));
+        }
+        finally { Remove(dir); }
+    }
+
+    [Fact]
+    public async Task A_second_press_while_a_page_is_on_its_way_sends_nothing()
+    {
+        var dir = NewDir();
+        try
+        {
+            var engine = new ScriptedEngine { Hold = new TaskCompletionSource() };
+            var test = new TestPrint(() => engine, dir);
+            var first = test.SendAsync("Canon colour", colour: true);
+            await Wait.Until(() => { lock (engine.Requests) return engine.Requests.Count == 1; });
+            Assert.True(test.Running);
+            Assert.Null(await test.SendAsync("Canon colour", colour: true));                 // the double click
+            Assert.Null(await test.SendAsync("HP mono", colour: false));                     // or the other button
+            Assert.Null(await Task.Run(() => test.SendAsync("Canon colour", colour: true))); // from any thread
+            Assert.Single(engine.Requests);
+            Assert.True(File.Exists(engine.Requests[0].FilePath));                           // the refused presses did not take the first one's file away
+            engine.Hold.SetResult();
+            Assert.True((await first) is { Accepted: true });
+            Assert.Single(engine.Requests);
+            Assert.NotNull(await test.SendAsync("Canon colour", colour: true));              // afterwards the button works again
+            Assert.Equal(2, engine.Requests.Count);
+        }
+        finally { Remove(dir); }
+    }
+
+    [Fact]
+    public async Task The_page_file_is_removed_and_the_button_freed_also_when_the_print_program_fails_or_breaks()
+    {
+        var dir = NewDir();
+        try
+        {
+            var engine = new ScriptedEngine { Answer = new(false, "exit_code_1") };
+            var test = new TestPrint(() => engine, dir);
+            Assert.Equal((false, "exit_code_1"), ((await test.SendAsync("P", true))!.Accepted, (await test.SendAsync("P", true))!.Error));
+            engine.Throw = new InvalidOperationException("the print program could not be started");
+            await Assert.ThrowsAsync<InvalidOperationException>(() => test.SendAsync("P", true));
+            Assert.False(test.Running);
+            Assert.Equal(3, engine.Requests.Count);
+            Assert.Empty(Directory.GetFiles(dir));
+        }
+        finally { Remove(dir); }
+    }
+
+    [Fact]
+    public void Every_result_is_said_in_plain_words_and_never_claims_that_paper_came_out()
+    {
+        var ok = TestPrint.Words(new(true, null), "Canon colour", colour: true, prompts: false);
+        Assert.Contains("the colour printer “Canon colour”", ok);
+        Assert.Contains("Check that a page came out", ok);
+        Assert.DoesNotContain("printed", ok, StringComparison.OrdinalIgnoreCase);            // the software saw it accepted, not paper
+        Assert.Contains("the printer “HP mono”", TestPrint.Words(new(true, null), "HP mono", colour: false, prompts: false));
+
+        string?[] errors = [SumatraEngine.NotReadyReason, "printer_not_found", "engine_timeout", "exit_code_1", "file_missing", PageRange.InvalidReason, null, "something_new"];
+        foreach (var error in errors)
+            foreach (var prompts in new[] { false, true })
+            {
+                var text = TestPrint.Words(new(false, error), "Canon colour", true, prompts);
+                Assert.False(string.IsNullOrWhiteSpace(text));
+                Assert.DoesNotContain("_", text);                                            // no reason code reaches the shopkeeper
+                Assert.DoesNotContain("exit", text, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain("Sent to", text);
+                Assert.EndsWith(".", text);
+            }
+        Assert.Contains("switched on", TestPrint.Words(new(false, "engine_timeout"), "P", true, prompts: false));
+        Assert.Contains("makes a file", TestPrint.Words(new(false, "engine_timeout"), "P", true, prompts: true));
+        Assert.Contains("Install AutoPrint again", TestPrint.Words(new(false, SumatraEngine.NotReadyReason), "P", true, false));
+    }
+
+    [RealPrinterFact]
+    public async Task With_the_real_print_program_the_colour_test_page_is_accepted_by_the_named_printer_and_refused_plainly_for_one_that_is_gone()
+    {
+        var dir = NewDir();
+        try
+        {
+            var printer = Environment.GetEnvironmentVariable("AP_REAL_PRINTER")!;
+            var test = new TestPrint(() => new SumatraEngine(Environment.GetEnvironmentVariable("AP_SUMATRA")!), dir);
+            var r = await test.SendAsync(printer, colour: true);
+            Assert.True(r is { Accepted: true }, r?.Error);
+            Assert.Empty(Directory.GetFiles(dir));
+
+            var gone = await test.SendAsync("No Such Printer " + Guid.NewGuid(), colour: true);
+            Assert.Equal((false, "printer_not_found"), (gone!.Accepted, gone.Error));
+            Assert.Equal("Windows cannot find this printer any more. Choose another one.", TestPrint.Words(gone, "x", true, false));
+            Assert.Empty(Directory.GetFiles(dir));
+        }
+        finally { Remove(dir); }
+    }
+}

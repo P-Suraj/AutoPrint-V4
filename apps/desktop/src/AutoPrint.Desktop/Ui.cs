@@ -152,15 +152,30 @@ internal static class Motion
         brush.BeginAnimation(SolidColorBrush.ColorProperty, new ColorAnimation(to, Slow) { EasingFunction = Ease });
     }
 
-    /// <summary>The quiet "working" line under a job that is printing: a soft light gliding along a thin track.</summary>
+    /// <summary>The quiet "working" line under a job that is printing: a soft light gliding along a thin track.
+    /// It is the only motion that repeats, so it runs only while it can be seen: with the window in the tray or
+    /// minimised, or the Finished tab in front, a long print costs nothing.</summary>
     public static FrameworkElement Progress()
     {
         var glide = new TranslateTransform(0, 0);
         var light = new Border { Width = 140, Height = 3, CornerRadius = new CornerRadius(1.5), Background = Ui.Brush("Brand"), HorizontalAlignment = HorizontalAlignment.Left, RenderTransform = glide };
         var track = new Border { Height = 3, CornerRadius = new CornerRadius(1.5), Background = Ui.Brush("BrandLine"), ClipToBounds = true, Child = light, Margin = new Thickness(0, 10, 0, 0) };
-        if (On)
-            track.SizeChanged += (_, a) => glide.BeginAnimation(TranslateTransform.XProperty,
-                new DoubleAnimation(-140, a.NewSize.Width, TimeSpan.FromSeconds(1.8)) { RepeatBehavior = RepeatBehavior.Forever, EasingFunction = Frozen(new SineEase { EasingMode = EasingMode.EaseInOut }) });
+        if (!On) return track;
+        Window? window = null;
+        bool running = false; double width = 0;
+        void Run()
+        {
+            bool seen = track.IsVisible && track.ActualWidth > 0 && window is { WindowState: not WindowState.Minimized };
+            if (seen == running && (!seen || width == track.ActualWidth)) return;
+            running = seen; width = track.ActualWidth;
+            glide.BeginAnimation(TranslateTransform.XProperty, !seen ? null
+                : new DoubleAnimation(-140, width, TimeSpan.FromSeconds(1.8)) { RepeatBehavior = RepeatBehavior.Forever, EasingFunction = Frozen(new SineEase { EasingMode = EasingMode.EaseInOut }) });
+        }
+        void StateChanged(object? sender, EventArgs e) => Run();
+        track.Loaded += (_, _) => { if (window is null) { window = Window.GetWindow(track); if (window is not null) window.StateChanged += StateChanged; } Run(); };
+        track.Unloaded += (_, _) => { if (window is not null) window.StateChanged -= StateChanged; window = null; Run(); };     // the card is gone: the window must not keep it alive
+        track.SizeChanged += (_, _) => Run();
+        track.IsVisibleChanged += (_, _) => Run();
         return track;
     }
 }

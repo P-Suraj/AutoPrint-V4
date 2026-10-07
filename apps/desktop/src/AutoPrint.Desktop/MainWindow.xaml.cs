@@ -83,10 +83,10 @@ public partial class MainWindow : Window
         Width = Math.Min(Width, SystemParameters.WorkArea.Width); Height = Math.Min(Height, SystemParameters.WorkArea.Height);
         _tick.Tick += (_, _) => Tick();
         _healthTimer.Tick += (_, _) => _ = RefreshHealthAsync();
-        IsVisibleChanged += (_, _) => Timers();
+        IsVisibleChanged += (_, _) => { Timers(); if (IsVisible) Refresh(); };
         // messages at the top never push the requests off a small window: past a third of its height they scroll
         SizeChanged += (_, a) => BannerArea.MaxHeight = Math.Max(120, a.NewSize.Height * 0.36);
-        Activated += (_, _) => Alerts.Flash(this, on: false);
+        Activated += (_, _) => { Alerts.Flash(this, on: false); Refresh(); };
         PreviewKeyDown += (_, e) => { if (e.Key == System.Windows.Input.Key.F && System.Windows.Input.Keyboard.Modifiers == System.Windows.Input.ModifierKeys.Control && QueueView.IsVisible) { TabFinished.IsChecked = true; SearchBox.Focus(); e.Handled = true; } };
     }
 
@@ -101,6 +101,10 @@ public partial class MainWindow : Window
     public void Stop() => _cts.Cancel();
     public bool IsPrinting => _state.Current is not null;
     public void WakeAgent() => _agent?.Wake();
+
+    /// <summary>The shopkeeper has just opened the window or brought it to the front: show the list as it is now, not
+    /// as it was up to 10 s ago. Costs at most one request, and none when the server was asked a moment ago.</summary>
+    private void Refresh() => _agent?.WakeIfStale(TimeSpan.FromSeconds(3));
 
     /// <summary>Timers run only while the window can be seen, so a window sitting in the tray all day costs nothing.</summary>
     private void Timers()
@@ -267,7 +271,7 @@ public partial class MainWindow : Window
             var attention = q.Jobs.Where(j => j.Status == JobStatus.NeedsAttention).Select(j => j.JobId).ToHashSet();
             foreach (var id in _queueLook.Keys.Where(id => !attention.Contains(id)).ToList()) { _queueLook.Remove(id); _leftByItself.Remove(id); }
             foreach (var id in attention) _ = LookInQueueAsync(id);
-            Alert(_alerts.Next(q.Jobs, DateTimeOffset.UtcNow));
+            Alert(_alerts.Next(q.Jobs, DateTimeOffset.UtcNow, ServerNow(), s.Online));
             _preview?.JobChanged(q.Jobs.FirstOrDefault(j => j.JobId == _preview.JobId));
         }
         Render();
@@ -332,7 +336,7 @@ public partial class MainWindow : Window
         foreach (var e in _cardEntries.Values) e.Live?.Invoke(now);
         if (_notice is not null && Clock() - _noticeAt > TimeSpan.FromSeconds(20)) { _notice = null; Render(); }
         foreach (var id in _busy.Where(b => b.Value is { } sent && Clock() - sent > TimeSpan.FromSeconds(30)).Select(b => b.Key).ToList()) { _busy.Remove(id); Render(); }
-        if (_live && _state.Queue is { } q) Alert(_alerts.Next(q.Jobs, DateTimeOffset.UtcNow));
+        if (_live && _state.Queue is { } q) Alert(_alerts.Next(q.Jobs, DateTimeOffset.UtcNow, now, _state.Online));
     }
 
     // ---------------------------------------------------------------- keyed lists: change only what changed
@@ -509,16 +513,18 @@ public partial class MainWindow : Window
     {
         var (soft, line, ink, glyph) = kind switch { "Err" => ("ErrSoft", "ErrLine", "Err", Ui.Warning), "Warn" => ("WarnSoft", "WarnLine", "Warn", Ui.Warning), _ => ("BrandSoft", "BrandLine", "Brand", Ui.Info) };
         var row = new DockPanel();
-        var icon = Ui.Icon(glyph, ink); icon.Margin = new Thickness(0, 2, 10, 0); icon.VerticalAlignment = VerticalAlignment.Top;
-        row.Children.Add(icon);
         if (button is not null)
         {
             var b = Ui.B(button); b.Margin = new Thickness(14, 0, 0, 0); b.VerticalAlignment = VerticalAlignment.Center; b.MinHeight = 32;
             b.Click += (_, _) => click?.Invoke();
             DockPanel.SetDock(b, Dock.Right); row.Children.Add(b);
         }
-        var t = Ui.T(text); t.VerticalAlignment = VerticalAlignment.Center;
-        row.Children.Add(t);
+        // the sign sits beside the first line of the words, and the two together are centred against the button
+        var words = new DockPanel { VerticalAlignment = VerticalAlignment.Center };
+        var icon = Ui.Icon(glyph, ink); icon.Margin = new Thickness(0, 2, 10, 0); icon.VerticalAlignment = VerticalAlignment.Top;
+        words.Children.Add(icon);
+        words.Children.Add(Ui.T(text));
+        row.Children.Add(words);
         return new Border { Style = Ui.Res<Style>("BannerBox"), Background = Ui.Brush(soft), BorderBrush = Ui.Brush(line), Child = row };
     }
 

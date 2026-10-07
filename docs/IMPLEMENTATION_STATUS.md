@@ -377,3 +377,39 @@ Correction to the earlier table of this day: choosing a file always cost about 5
 - The dashboard's 45 s is a copy of a server setting, and it compares the server's last-seen time with the browser's clock, so a wrong clock gives a wrong answer. The proper fix is an `online` field per computer from `/v1/shop/devices` (needs the API and the contract). Not done.
 
 **Not verified:** real phones; the live site; whether Vercel sends the `.mjs` worker compressed and with cache headers that let the background fetch be reused (check with `curl -sI -H "Accept-Encoding: br, gzip" https://autoprint-v4.vercel.app/assets/pdf.worker.min-<hash>.mjs` after deploying); the case where a locked or broken PDF is uploaded because the 3 s cap ran out and the server then refuses it (no test exercises it); the data-saver branch; the background fetch and the 3 s cap in WebKit beyond the 17 functional tests; dashboard screens at 320 px; the 45 s threshold against a real shop computer.
+
+## Windows app 4.0.3: screens looked at, soak measured, a never-ending reminder fixed (7 October 2026, local only)
+
+Done by a Windows app sub-agent; its report is folded in here. The lead did not repeat its runs; the lead bumped the version and built the installer. Only the virtual printer AutoPrint-Spike-PDF was used. **Not installed anywhere; nothing tried on a real printer or by a person on a real screen.**
+
+**Verified by the sub-agent after its last source edit:** `dotnet build apps/desktop -c Release` 0 warnings; `dotnet test ... --filter "FullyQualifiedName!~LiveE2ETests"` 171 passed, 6 skipped; the same with `AP_REAL_PRINTER=AutoPrint-Spike-PDF` and `AP_SUMATRA` set: 177 passed, 0 skipped; `AutoPrint.exe --selftest-ui <folder> live` exit 0, 72 PASS, 0 FAIL; `e2e/run_local_chain.py` PASS (job visible 2.19 s, completed 5.6 s, 2 pages out), run with the backend changes of this day already in the working tree, so the lead did not run it again.
+
+**Installer:** `dist\AutoPrintSetup-4.0.3.exe`, 59.0 MB, SHA-256 `3943fc0f623fa91ffc90f6f63fb72373467bf995710da59c112799625a966d68`, built by the lead with `apps\desktop\installeruild.ps1 -Version 4.0.3` after changing the version from 4.0.2 in six files. **The tests were not re-run after the version change** (a version string only; the publish compiled). Not signed, not installed, not scanned.
+
+**Defect found and fixed: the reminder sound could repeat forever.** When the PC lost its connection the app kept showing the last queue it had, and chimed every 2 minutes for as long as the PC stayed on (for example all night with the router off), about requests that had long expired. Now: no sound while offline; requests past their approval time (server clock) are not counted; one reminder when the connection is back and something still waits. Test: 8 hours offline give no reminder; one unanswered request gives 29 reminders, all inside its hour.
+
+**Other changes:**
+- Opening the window from the tray, or bringing it to the front, asks the server at once if the last answer is older than 3 s (it did not before). It replaces the next regular poll, so the steady rate of one call per 10 s is unchanged; 20 calls make one poll (tested).
+- The moving progress line of a printing job rests when nobody can see it (window in the tray, minimised, or the Finished tab in front).
+- "Test the colour printer": the logic moved to `TestPrint` (in `TestPage.cs`) with tests: it can only go to the printer chosen in the colour box, a double click sends one page (two extra guards), the file is always deleted, every failure has plain words.
+- A banner's icon sat about 7 px above its text; fixed.
+
+**Soak** (`--selftest-ui <folder> soak:300`, 8 logical processors, per cent of one core):
+
+| State, 300 s each | CPU | Private memory |
+|---|---|---|
+| Quiet queue | 0.2 to 0.8% (0.8% includes start-up) | 89 to 81 MB, falling |
+| One job printing, window in view | 8 to 11% (other work was running on the PC) | steady |
+| One job printing, window minimised | 0.18% | steady |
+
+Idle cost is close to zero and memory does not grow. The one real cost is the moving line while a job prints. Not measured on a slow shop PC. Not done: capping that animation at 30 frames a second (about half the cost), because nobody could judge on a real screen whether it still looks smooth.
+
+**Screens:** all 74 pictures of the build before these changes were looked at (26 scenes at 100%, 150% and the smallest window). The 26 scenes were **not** rendered again on the final build; the banner fix was seen only in the live run's own pictures. Left open: the Settings window (807 px tall) will always scroll on a 1366 x 768 laptop, and with the no-paper warning the last line of the disconnect text is cut until scrolled; at 640 x 480 two long banners overflow the banner area; "Colour" is not highlighted in the preview header as it is on the card; the colour test page has only black text, so it shows that the colour printer answers, not that colour works.
+
+**Read but not run for real:** the taskbar flash (logic reads correct; while Preview or Settings is the active window, a new request flashes the taskbar button until that window is closed); the wake-up on the real "window activated" path; the sound.
+
+**Open decisions for the founder (nothing changed):**
+1. The reminder chimes every 2 minutes for up to the hour a request can wait (up to 29 times per request). Too many?
+2. The 10 s poll. The remaining wait is 0 to 10 s for a request to appear when the shopkeeper is not touching the app. A shop open 12 hours makes about 4,300 calls a day at 10 s; 5 s doubles that and would bring the measured 90th percentile from about 9 s to about 5 s. A middle way: every 4 to 5 s for a few minutes after something happened, 10 s or slower when the shop is quiet (a small change in `AgentService.NextDelay`).
+
+A V3 `F:\AutoPrint\AutoPrint.exe` was running on the PC throughout and was left alone.

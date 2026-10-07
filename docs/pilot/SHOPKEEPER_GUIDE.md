@@ -8,7 +8,7 @@ Students send a PDF from their phone. It appears on your computer. You look, you
 
 - **Top right:** a green dot and "Connected" means all is well. Orange and "No internet" means the internet is down; wait, it reconnects by itself.
 - **Requests:** what needs you now. **Finished:** the last 24 hours. Type an order code there to find any order.
-- You hear a sound when a request arrives, and again every 2 minutes while one is waiting.
+- You hear a sound when a request arrives, and again every 2 minutes while one is waiting. The sound stops when you answer, when the request's hour is over, or while there is no internet.
 
 Each request is one card:
 
@@ -27,7 +27,7 @@ Each request is one card:
 | **Approve and print** | Prints it now. If something is already printing, it waits its turn. |
 | **Preview** | Shows the pages first. You can approve or reject from there. |
 | **Reject** | Refuses it, with one click. Nothing prints. The student only sees "The shop declined this print", so tell them why. |
-| **Settings** | Choose the printer, print a test page, turn the sound on or off. |
+| **Settings** | Choose the printer, print a test page, turn the sound on or off. If you have a second printer for colour, choose it there too and press **Test the colour printer**. |
 | **X** (close the window) | The window hides but AutoPrint keeps working. Open it again from the small printer icon near the clock. Do not use "Quit" during shop hours. |
 
 When it has printed, the card moves to **Finished** as "Sent to printer". Check the pages are really there, take the money, hand them over.
