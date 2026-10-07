@@ -423,7 +423,7 @@ internal static partial class SelfTest
             pages.Asked[0].Printer == colourPrinter && pages.Asked[0].Options == new PrintOptions(1, true, false, null) && pages.Asked[0].SpoolerJobName.StartsWith("aptest_"));
         await Shot(sw, "live-11-settings-colour-test-running");
         pages.Hold.SetResult(); pages.Hold = null;
-        Check("colour test: the result names the colour printer and asks to check the page", await Until(() => sw.Result.Text == $"Sent to the colour printer “{colourPrinter}”. Check that a page came out there." && sw.TestColorBtn.IsEnabled && sw.TestBtn.IsEnabled, 5));
+        Check("colour test: the result names the colour printer and asks to check the page", await Until(() => sw.Result.Text == $"Sent to the colour printer “{colourPrinter}”. Check that a page came out there and that its three squares are red, green and blue." && sw.TestColorBtn.IsEnabled && sw.TestBtn.IsEnabled, 5));
         await Shot(sw, "live-12-settings-colour-test-sent");
         pages.Answer = new(false, "exit_code_1");
         Click(sw.TestColorBtn);

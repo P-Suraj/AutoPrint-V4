@@ -79,27 +79,21 @@ Migration 0009 is applied live (6 Oct 2026); email sign-in stays inactive until 
 
 (Sections 2 to 5 above describe 6 October and are partly out of date: test counts, installer version and "next steps" are superseded by this section. Evidence for everything here is in `docs/IMPLEMENTATION_STATUS.md`, the sections dated 7 October.)
 
-- **`main` (pushed, live) is unchanged since 6 October:** Windows app 4.0.1, website and API of commit `f04edf8`. Live database: migrations 0001 to 0009 applied; whether 0010 to 0013 were applied by the founder is **not known in this repository** (check with `PY scripts/ap_remote.py status` once the new code is live, or `scripts/ap_report.py`).
-- **Branch `wip/2026-10-06-unverified` is now tested and green locally, and holds everything below. It is NOT merged, NOT deployed, and its migrations are NOT applied live.** The branch name is historical; the work on it is no longer "unverified" in the local sense.
-  - Backend: security-review fixes with tests; migrations 0014 to 0019 (0015 irreversibly blanks names and checksums of already-deleted documents; the others replace one function each); customer routes down to 1 or 2 database round trips; `ap_remote.py status` and `migrate`. Last full run: 301 passed.
-  - Website: 73 unit tests, 17 of 17 browser tests in Edge and in WebKit; preview never delays Continue; pdf.js fetched in the background on the shop page; 2 s status poll between approval and result; small-phone fixes.
-  - Windows app 4.0.3: `dist\AutoPrintSetup-4.0.3.exe` (SHA-256 in the file next to it and in the status file). 177 tests with the real print queue on the virtual printer, 72-step self-test, whole local chain PASS.
-- The failing cancel-versus-claim race of 6 October was the shared test database running out of connections, not migration 0014.
+- **`main` is deployed (7 October, merge commit `0603216` and later):** security-review fixes, customer routes in 1 or 2 database round trips, the website changes, and the source of Windows app 4.0.4. Seen live: only that the new `/v1/internal/status` route exists. **Not checked live: anything else.**
+- **Live database: unknown which migrations are applied** (0001 to 0009 certainly; 0010 to 0019 unless the founder has run them). The Claude session is refused every call that uses the maintenance token, so only the founder can look and apply.
+- **Windows app 4.0.4:** `dist\AutoPrintSetup-4.0.4.exe` (SHA-256 next to it and in the status file). Not yet installed anywhere. The founder's installed copy is older and was set to Microsoft Print to PDF.
+- The founder gave the model freedom to decide features (G-2), with "do not over-engineer". Decisions taken under it are G-3 to G-8 in `docs/DECISIONS.md`. **Payments are deliberately not started (G-7).**
+- The non-payment software build is complete as far as it can be without a real printer, a real phone and the founder's live checks. What remains is checking, not building.
 
-### Next steps, in order
-1. **Founder decides: merge the branch to `main` and push.** Pushing `main` deploys the site and API. Commands: `git checkout main`, `git merge --no-ff wip/2026-10-06-unverified`, `git push origin main`. The new API works with the old database, so deploy first.
-2. **Founder runs** (the Claude session is not permitted to call the live maintenance endpoints): `apps\api\.venv\Scripts\python.exe scripts\ap_remote.py status`, then `... scripts\ap_remote.py migrate`, then `status` again (must say "Nothing pending"). See RUNBOOK section 8.
-3. **Founder runs** `apps\api\.venv\Scripts\python.exe e2e\run_live_e2e.py`, and sends one PDF from a real phone at `/s/TST001`. After deploying also check the worker file is served compressed (command in the status file, website section of 7 October).
-4. **Founder installs `dist\AutoPrintSetup-4.0.3.exe`** over the installed copy, opens Settings and **chooses the real printer** (the installed app was set to Microsoft Print to PDF, which is why order BLS3 failed), then follows `docs/TEST_THE_WINDOWS_APP.md`, including the six things listed there to try on a real screen and printer.
-5. Founder actions still open from before: add the GitHub secret `AUTOPRINT_MAINTENANCE_TOKEN`; in Supabase set the `print-documents` bucket to 25 MB and `application/pdf` only.
-6. Physical certification at the shop (30 to 50 real prints, duplex, colour, failure drills); then the Phase 7 leftovers (clean-PC install, reboot, 24-hour soak).
-7. Payments: parked by the founder until the rest is done. Design and 14 questions in `docs/PAYMENTS_DESIGN.md`.
-
-### Decisions waiting for the founder (nothing was changed for these)
-- Reminder sound: every 2 minutes for up to an hour per unanswered request (up to 29 chimes). Keep, or fewer?
-- Shop poll interval: keep 10 s, halve it (doubles the calls to the host), or "fast for a few minutes after something happens, slow when quiet".
-- The shop page now downloads about 530 KB in the background for every visitor so the preview is quick. Keep, or fetch only when the file button is touched (slower preview, less mobile data)?
-- Requests already waiting when the app starts make no sound at first (a reminder follows after 2 minutes). Keep?
+### Next steps, in order (all for the founder; `PY` = `apps\api\.venv\Scripts\python.exe`)
+1. `PY scripts\ap_remote.py status` (shows site health and which database updates are pending).
+2. `PY scripts\ap_remote.py migrate` (applies them; 0015 permanently blanks the names and checksums of files that were already deleted). Then `status` again: it must say "Nothing pending".
+3. `PY e2e\run_live_e2e.py` (whole chain on the live site with the virtual printer), then send one PDF from a real phone at `https://autoprint-v4.vercel.app/s/TST001`.
+4. Install `dist\AutoPrintSetup-4.0.4.exe` over the installed copy, open Settings, **choose the real printer**, press "Print a test page" (and "Test the colour printer" if there is one), then follow `docs/TEST_THE_WINDOWS_APP.md`.
+5. Add the GitHub secret `AUTOPRINT_MAINTENANCE_TOKEN` (the cleanup workflow fails until then); in Supabase set the `print-documents` bucket to 25 MB and `application/pdf` only.
+6. Physical certification at the shop with `docs/pilot/` (30 to 50 real prints, duplex, colour, failure drills, record what the real driver reports). Until then the page says "Sent to printer", never "Printed".
+7. Phase 7 leftovers when a spare PC is at hand: clean-PC install timed, reboot, 24-hour soak.
+8. If anything fails in steps 1 to 4, paste the exact output into a new session; the model can fix code but cannot see the live system.
 
 ### Known and left open (details in the status file)
 Not load-tested after the round-trip change (`e2e/load_test.py` not re-run); latency on the live pooler not measured; the live PostgreSQL version not checked (the quote statement needs 12 or newer, else it falls back); Settings window scrolls on a 1366 x 768 laptop; the colour test page is black only; the dashboard's offline threshold is a copy of a server setting and trusts the browser clock; a locked PDF uploaded after the 3 s check limit is refused only by the server and that path has no test; finalize could save one database round trip; the docstring of `supabase/tests/test_queue_and_retention.py` still says "0014 to 0018".

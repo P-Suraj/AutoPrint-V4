@@ -226,6 +226,8 @@ public sealed class AlertPolicy(TimeSpan? remindEvery = null)
     private readonly HashSet<Guid> _seen = [];
     private DateTimeOffset _last = DateTimeOffset.MinValue;
     private bool _started;
+    private int _reminders;          // since the last new request: the first three come one interval apart, later ones five
+    private const int QuickReminders = 3;
 
     /// <param name="now">This PC's clock: used only to space the alerts.</param>
     /// <param name="serverNow">The server's clock carried forward, to tell whether a request can still be approved. Defaults to <paramref name="now"/>.</param>
@@ -239,9 +241,12 @@ public sealed class AlertPolicy(TimeSpan? remindEvery = null)
         _seen.IntersectWith(waiting.Select(j => j.JobId));           // answered requests are forgotten, so this never grows
         foreach (var j in fresh) _seen.Add(j.JobId);
         if (!_started) { _started = true; _last = now; return Alert.Nothing; }
-        if (open.Count == 0) return Alert.Nothing;
-        if (fresh.Count > 0) { _last = now; return new(AlertKind.New, fresh.Count, fresh[^1].DocumentName); }
-        if (now - _last >= _remindEvery || now < _last) { _last = now; return new(AlertKind.Reminder, open.Count, null); }
+        if (open.Count == 0) { _reminders = 0; return Alert.Nothing; }
+        if (fresh.Count > 0) { _last = now; _reminders = 0; return new(AlertKind.New, fresh.Count, fresh[^1].DocumentName); }
+        // A shopkeeper who has not answered after three reminders is busy or away: keep reminding, but far less often,
+        // so the counter is not filled with a chime every two minutes for the whole hour a request can wait.
+        var gap = _reminders < QuickReminders ? _remindEvery : _remindEvery * 5;
+        if (now - _last >= gap || now < _last) { _last = now; _reminders++; return new(AlertKind.Reminder, open.Count, null); }
         return Alert.Nothing;
     }
 }

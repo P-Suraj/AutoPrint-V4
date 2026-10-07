@@ -7,11 +7,15 @@ namespace AutoPrint.Core.Printing;
 /// <summary>A one-page PDF with a few lines of text, built in memory. Used by "Print a test page" and by tests.</summary>
 public static class TestPage
 {
-    public static byte[] Build(string line1, string line2)
+    /// <param name="colour">Adds a red, a green and a blue square, so a person can see that colour really prints.</param>
+    public static byte[] Build(string line1, string line2, bool colour = false)
     {
         static string Esc(string s) => s.Replace("\\", "\\\\").Replace("(", "\\(").Replace(")", "\\)");
         var content = $"BT /F1 28 Tf 72 740 Td ({Esc(line1)}) Tj ET\nBT /F1 14 Tf 72 700 Td ({Esc(line2)}) Tj ET\n" +
                       "BT /F1 12 Tf 72 660 Td (If you can read this, the printer is connected.) Tj ET";
+        if (colour)
+            content += "\nBT /F1 12 Tf 72 630 Td (The three squares below must be red, green and blue.) Tj ET\n" +
+                       "1 0 0 rg 72 520 90 90 re f\n0 0.6 0.2 rg 182 520 90 90 re f\n0 0.2 1 rg 292 520 90 90 re f\n0 g";
         var objects = new[]
         {
             "<</Type/Catalog/Pages 2 0 R>>",
@@ -64,7 +68,7 @@ public sealed class TestPrint(Func<IPrintEngine> engine, string dir)
         try
         {
             Directory.CreateDirectory(dir);
-            await File.WriteAllBytesAsync(file, TestPage.Build("AutoPrint test page", DateTime.Now.ToString("g")), ct);
+            await File.WriteAllBytesAsync(file, TestPage.Build("AutoPrint test page", DateTime.Now.ToString("g"), colour), ct);
             return await engine().SubmitAsync(new PrintRequest(file, printer, new PrintOptions(1, colour, false, null), jobName, 1), ct);
         }
         finally
@@ -78,7 +82,7 @@ public sealed class TestPrint(Func<IPrintEngine> engine, string dir)
     /// <param name="prompts">The printer makes a file and opens a window that waits for a person.</param>
     public static string Words(SubmitResult result, string printer, bool colour, bool prompts)
     {
-        if (result.Accepted) return $"Sent to {(colour ? "the colour printer" : "the printer")} “{printer}”. Check that a page came out there.";
+        if (result.Accepted) return $"Sent to {(colour ? "the colour printer" : "the printer")} “{printer}”. Check that a page came out there{(colour ? " and that its three squares are red, green and blue" : "")}.";
         return result.Error switch
         {
             SumatraEngine.NotReadyReason => "AutoPrint's print program is missing or damaged. Install AutoPrint again.",

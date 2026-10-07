@@ -445,7 +445,8 @@ public class AlertEndTests
             if (alert.Kind == AlertKind.Reminder) reminders.Add(t);
         }
         Assert.Equal(Now.AddMinutes(2), reminders[0]);                                       // the first one two minutes after start-up
-        Assert.Equal(29, reminders.Count);                                                   // every 2 minutes for its hour, then no more
+        // three reminders two minutes apart, then one every ten minutes until its hour is over, then no more
+        Assert.Equal(new[] { 2, 4, 6, 16, 26, 36, 46, 56 }, reminders.Select(t => (int)(t - Now).TotalMinutes));
         Assert.All(reminders, t => Assert.True(t < Now.AddHours(1)));
     }
 
@@ -644,6 +645,12 @@ public class TestPrintTests
         Assert.Contains("Check that a page came out", ok);
         Assert.DoesNotContain("printed", ok, StringComparison.OrdinalIgnoreCase);            // the software saw it accepted, not paper
         Assert.Contains("the printer “HP mono”", TestPrint.Words(new(true, null), "HP mono", colour: false, prompts: false));
+        Assert.Contains("red, green and blue", ok);                                          // the colour page has something coloured to look at
+        Assert.DoesNotContain("squares", TestPrint.Words(new(true, null), "HP mono", colour: false, prompts: false));
+        var plain = System.Text.Encoding.ASCII.GetString(TestPage.Build("a", "b"));
+        var coloured = System.Text.Encoding.ASCII.GetString(TestPage.Build("a", "b", colour: true));
+        Assert.DoesNotContain(" rg ", plain);
+        Assert.Contains("1 0 0 rg 72 520 90 90 re f", coloured);
 
         string?[] errors = [SumatraEngine.NotReadyReason, "printer_not_found", "engine_timeout", "exit_code_1", "file_missing", PageRange.InvalidReason, null, "something_new"];
         foreach (var error in errors)

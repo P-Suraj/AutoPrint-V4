@@ -8,7 +8,7 @@ Students send a PDF from their phone. It appears on your computer. You look, you
 
 - **Top right:** a green dot and "Connected" means all is well. Orange and "No internet" means the internet is down; wait, it reconnects by itself.
 - **Requests:** what needs you now. **Finished:** the last 24 hours. Type an order code there to find any order.
-- You hear a sound when a request arrives, and again every 2 minutes while one is waiting. The sound stops when you answer, when the request's hour is over, or while there is no internet.
+- You hear a sound when a request arrives, and again while one is waiting: three times 2 minutes apart, then every 10 minutes. The sound stops when you answer, when the request's hour is over, or while there is no internet.
 
 Each request is one card:
 
