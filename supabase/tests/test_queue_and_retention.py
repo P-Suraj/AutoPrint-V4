@@ -1,4 +1,4 @@
-"""Migrations 0014 to 0018 on a real database: the shop queue under a flood, the cap on waiting jobs, files past
+"""Migrations 0014 to 0020 on a real database: the shop queue under a flood, the cap on waiting jobs, files past
 their retention deadline, and what is left in the rows once a file is deleted."""
 import uuid
 
@@ -53,7 +53,8 @@ def test_a_flood_of_many_file_orders_cannot_push_a_waiting_job_off_the_shop_scre
     assert len(done_jobs) == 40                                       # only the finished group is cut
     assert [j["job_id"] for j in done_jobs] == finished[::-1][:40]    # most recently finished first
     assert set(jobs[0]) == {"job_id", "order_short_code", "document_name", "page_count", "copies", "color", "duplex", "page_range",
-                            "amount_paise", "status", "created_at", "approval_expires_at", "attempt_count"}   # same fields as before
+                            "amount_paise", "status", "created_at", "approval_expires_at", "attempt_count",
+                            "order_files", "order_total_paise"}                                    # 0020 added the last two
 
 
 def test_queue_shows_every_open_state_and_only_a_day_of_finished_jobs(shop, db):

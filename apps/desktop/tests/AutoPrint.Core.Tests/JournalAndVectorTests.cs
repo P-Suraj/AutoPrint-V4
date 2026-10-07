@@ -168,5 +168,17 @@ public class ContractTests
         Assert.Equal((JobStatus.AwaitingApproval, 720, "A91F", true), (j.Status, j.AmountPaise, j.OrderShortCode, j.Duplex));
         Assert.Null(j.PageRange);
         Assert.NotNull(j.ApprovalExpiresAt);
+        // a server without migration 0020 does not say how many files the order has: it is then an ordinary one-file order
+        Assert.Equal((1, (int?)null), (j.OrderFiles, j.OrderTotalPaise));
+        Assert.Null(JobText.OrderLine(j));
+    }
+
+    [Fact]
+    public void A_request_from_an_order_with_several_files_says_so_and_gives_the_order_total()
+    {
+        var json = """{"shop_code":"TST001","shop_name":"Shop","contract_version":1,"jobs":[{"job_id":"7a6d5f8e-1111-4222-8333-444455556666","order_short_code":"A91F","document_name":"cv.pdf","page_count":3,"copies":2,"color":false,"duplex":true,"page_range":null,"amount_paise":720,"status":"awaiting_approval","created_at":"2026-10-05T12:00:00+00:00","approval_expires_at":"2026-10-05T13:00:00+00:00","attempt_count":0,"order_files":3,"order_total_paise":2720}]}""";
+        var j = Assert.Single(JsonSerializer.Deserialize<JobListResponse>(json, Wire.Json)!.Jobs);
+        Assert.Equal(("One of 3 files in this order", "Order total ₹27.20"), JobText.OrderLine(j));
+        Assert.Equal(("One of 3 files in this order", (string?)null), JobText.OrderLine(j with { OrderTotalPaise = null }));
     }
 }

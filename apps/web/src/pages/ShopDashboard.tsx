@@ -4,13 +4,17 @@
 import { useCallback, useEffect, useState } from "react";
 import QRCode from "qrcode";
 import { ApiError, shopApi, shopAuth, type Schemas } from "../api";
-import { Icon, TopBar, timeAgo } from "../ui";
+import { KINDS, KIND_LABEL, emptyForm, formToTables, tablesToForm, type Kind, type PriceForm, type Tier } from "../rates";
+import { Icon, Segmented, TopBar, timeAgo } from "../ui";
+import "../shop-settings.css";
 
 const KEY = "ap_shop_key";
 // The same limit the server uses when it tells customers a shop is offline (agent_online_seconds, 45 by default):
 // the shopkeeper and the customer must not be told different things about the same computer.
 const ONLINE_WITHIN_MS = 45_000;
 const REFRESH_MS = 10_000;
+// The newest installer of the Windows app. The founder publishes each build as a GitHub release with this file name.
+const INSTALLER_URL: string = import.meta.env.VITE_INSTALLER_URL ?? "https://github.com/P-Suraj/AutoPrint-V4/releases/latest/download/AutoPrintSetup.exe";
 
 function readKey(): string | null {
   const m = /[#&]key=([0-9a-f]{64})/.exec(window.location.hash);
@@ -254,7 +258,12 @@ function Dashboard({ shopKey: key, onSignOut }: { shopKey: string; onSignOut: ()
             <div className="card-head"><h2><Icon.printer size={20} />Connect a computer</h2></div>
             <div className="connect">
               <ol className="howto">
-                <li>Install and open the AutoPrint app on the shop computer.</li>
+                <li>Install and open the AutoPrint app on the shop computer.
+                  <span className="download">
+                    <a className="button" href={INSTALLER_URL} rel="noreferrer"><Icon.monitor size={18} />Download AutoPrint for Windows</a>
+                    <small className="field-note">Windows may say “Windows protected your PC”. Press More info, then Run anyway.</small>
+                  </span>
+                </li>
                 <li>The app shows a code. Type it here.</li>
                 <li>Check the computer's name and confirm.</li>
               </ol>
@@ -275,6 +284,8 @@ function Dashboard({ shopKey: key, onSignOut }: { shopKey: string; onSignOut: ()
               </div>
             </div>
           </section>
+
+          <ShopSettings shopKey={key} onSaved={(name) => setMe((m) => (m && m.shop_name !== name ? { ...m, shop_name: name } : m))} onExpired={() => setExpired(true)} />
         </div>
 
         <aside className="desk-side">
@@ -296,5 +307,121 @@ function Dashboard({ shopKey: key, onSignOut }: { shopKey: string; onSignOut: ()
         </aside>
       </div>
     </main>
+  );
+}
+
+// What the shopkeeper decides: the shop's name, whether it prints in colour, and its prices. It loads by itself and
+// fails by itself: if this panel cannot load, the rest of the dashboard still works.
+function ShopSettings({ shopKey, onSaved, onExpired }: { shopKey: string; onSaved: (name: string) => void; onExpired: () => void }) {
+  const [state, setState] = useState<"loading" | "failed" | "ready">("loading");
+  const [attempt, setAttempt] = useState(0);
+  const [name, setName] = useState("");
+  const [colour, setColour] = useState(true);
+  const [form, setForm] = useState<PriceForm>(emptyForm);
+  const [hasPrices, setHasPrices] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  const show = useCallback((s: Schemas["ShopSettings"]) => {
+    setName(s.shop_name); setColour(s.color_enabled);
+    setHasPrices(!!(s.bw && s.color));
+    setForm(s.bw && s.color ? tablesToForm(s.bw, s.color) : emptyForm());
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    setState("loading");
+    shopApi.settings(shopKey)
+      .then((s) => { if (alive) { show(s); setState("ready"); } })
+      .catch((e) => { if (!alive) return; if (e instanceof ApiError && e.code === "unauthorized") onExpired(); else setState("failed"); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shopKey, attempt, show]);
+
+  const touched = () => { setSaved(false); setError(null); };
+  const setTiers = (kind: Kind, tiers: Tier[]) => { touched(); setForm((f) => ({ ...f, [kind]: tiers })); };
+  const edit = (kind: Kind, i: number, change: Partial<Tier>) => setTiers(kind, form[kind].map((t, n) => (n === i ? { ...t, ...change } : t)));
+
+  async function save() {
+    const shopName = name.trim();
+    if (shopName.length < 1 || shopName.length > 80) { setError("Enter your shop's name (up to 80 characters)."); return; }
+    const tables = formToTables(form, colour);
+    if (!tables.ok) { setError(tables.error); return; }
+    setError(null); setSaved(false); setBusy(true);
+    try {
+      const s = await shopApi.saveSettings(shopKey, { shop_name: shopName, color_enabled: colour, bw: tables.bw, color: tables.color });
+      show(s); onSaved(s.shop_name); setSaved(true);
+    } catch (e) {
+      if (e instanceof ApiError && e.code === "unauthorized") onExpired();
+      else setError(e instanceof ApiError && e.code === "invalid_items" ? "These prices could not be saved. Check each price and try again." : msg(e));
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <section className="card rise">
+      <div className="card-head">
+        <h2><Icon.file size={20} />Prices and shop details</h2>
+        {state === "ready" && <span className="meta">Customers see changes as soon as you save</span>}
+      </div>
+      {state === "loading" ? <div className="skeleton block" /> : state === "failed" ? (
+        <>
+          <p role="alert" className="error">Could not load your prices. Try again.</p>
+          <div><button onClick={() => setAttempt((n) => n + 1)}>Try again</button></div>
+        </>
+      ) : (
+        <form className="settings-form" onSubmit={(e) => { e.preventDefault(); if (!busy) void save(); }} noValidate>
+          <div className="settings-top">
+            <label className="field">
+              <span className="field-label">Shop name <small>What customers see when they open your link.</small></span>
+              <input type="text" value={name} maxLength={80} autoComplete="organization" onChange={(e) => { touched(); setName(e.target.value); }} />
+            </label>
+            <div className="field">
+              <Segmented label="Colour printing" value={colour ? "on" : "off"} onChange={(v) => { touched(); setColour(v === "on"); }}
+                         options={[{ value: "on", label: "We print in colour" }, { value: "off", label: "Black & white only" }]} />
+              <span className="field-note">{colour ? "Customers can choose colour or black & white." : "Customers are told you print in black & white only, and cannot choose colour."}</span>
+            </div>
+          </div>
+
+          <div className="field">
+            <span className="field-label">Prices, in rupees per printed side
+              <small>A side is one printed face: a sheet printed on both sides is two sides. A bulk price applies to every side of a job that reaches that many sides.</small>
+            </span>
+            {!hasPrices && <p className="note">No prices are set yet. Customers cannot order until you save your prices.</p>}
+            <div className="price-grid">
+              {KINDS.filter((k) => colour || k.startsWith("bw.")).map((kind) => (
+                <div key={kind} className="price-group" role="group" aria-label={KIND_LABEL[kind]}>
+                  <h3>{KIND_LABEL[kind]}</h3>
+                  {form[kind].map((t, i) => (
+                    <div key={i} className="tier">
+                      {i > 0 && <>
+                        <span>From</span>
+                        <input className="sides" type="text" inputMode="numeric" maxLength={7} value={t.from} aria-label={`${KIND_LABEL[kind]}: bulk price ${i} starts at this many sides`}
+                               onChange={(e) => edit(kind, i, { from: e.target.value })} />
+                        <span>sides:</span>
+                      </>}
+                      <span className="money">
+                        <input type="text" inputMode="decimal" maxLength={10} value={t.price} placeholder="0" aria-label={i === 0 ? `${KIND_LABEL[kind]}: price per side` : `${KIND_LABEL[kind]}: bulk price ${i} per side`}
+                               onChange={(e) => edit(kind, i, { price: e.target.value })} />
+                      </span>
+                      <span>per side</span>
+                      {i > 0 && <button type="button" className="icon-btn" aria-label={`Remove bulk price ${i} of ${KIND_LABEL[kind]}`} onClick={() => setTiers(kind, form[kind].filter((_, n) => n !== i))}><Icon.x size={16} /></button>}
+                    </div>
+                  ))}
+                  {form[kind].length < 6 && <button type="button" className="link" onClick={() => setTiers(kind, [...form[kind], { from: "", price: "" }])}>Add a bulk price</button>}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="settings-save">
+            <button type="submit" className="primary" disabled={busy}>{busy ? <><i className="spinner" />Saving…</> : "Save"}</button>
+            <div className="lookup">
+              {error ? <p role="alert" className="error">{error}</p> : saved ? <p role="status" className="found"><span className="tick"><Icon.check size={14} /></span>Saved</p> : null}
+            </div>
+          </div>
+        </form>
+      )}
+    </section>
   );
 }

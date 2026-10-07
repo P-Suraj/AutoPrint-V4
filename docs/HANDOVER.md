@@ -105,3 +105,22 @@ Not load-tested after the round-trip change (`e2e/load_test.py` not re-run); lat
 - Browser tools: `E2E_TOOL=walk E2E_OUT=<folder>` (screenshots at 320, 360, 412 px, dashboard included) and `E2E_TOOL=perf` (production build, slow-phone profile) through `e2e/run_web_e2e.py`.
 - The founder asked on 7 October not to spend tokens on unnecessary testing: test what a change touches, once.
 - A V3 `F:\AutoPrint\AutoPrint.exe` was running on this PC during the session. Leave it alone.
+
+## AFTER THE WALKTHROUGH, 7 October 2026 evening: read this too
+
+The founder asked for six things (H-1 to H-6 in `docs/DECISIONS.md`). Five are built on branch **`wip/2026-10-07-shop-settings-multi-file`**, tested locally only (evidence: the last section of `docs/IMPLEMENTATION_STATUS.md`). `main` and the live site are unchanged. H-6 (email sign-in) was left alone on his word.
+
+Built: the shopkeeper sets name, prices and colour on or off on the dashboard (migration 0020); several files per order with their own settings; search on the Requests tab and order totals in Windows app 4.0.5 (`dist\AutoPrintSetup-4.0.5.exe`); a download button for the installer on the dashboard.
+
+### Next steps, in order (for the founder; `PY` = `apps\api\.venv\Scripts\python.exe`)
+1. Say "deploy" to a model session (it merges the branch into `main` and pushes; the site deploys by itself), or do it yourself: `git checkout main`, `git merge wip/2026-10-07-shop-settings-multi-file`, `git push`.
+2. `PY scripts\ap_remote.py migrate` (applies 0020), then `PY scripts\ap_remote.py status` should say nothing is pending. Until this is run the site works as before, but the dashboard's price panel cannot load.
+3. Publish the installer so the dashboard button works: GitHub, the repository, Releases, "Draft a new release", tag `v4.0.5`, attach `dist\AutoPrintSetup.exe` (exactly this name), Publish. Details in `docs/RUNBOOK.md` section 9.
+4. Open the dashboard link: change a price and save, switch colour off and on, press the download button. On a phone open `/s/TST001` and send two PDFs with different settings.
+5. Install `dist\AutoPrintSetup-4.0.5.exe` over the installed copy and follow `docs/TEST_THE_WINDOWS_APP.md` ("What is new in 4.0.5"): type an order code in the search box, approve a two-file order.
+6. Then the earlier list above still stands (real printer, GitHub secret, bucket limits, physical certification).
+
+### Working notes
+- The first browser test of `e2e/run_web_e2e.py` fails on a cold start on `main` as well; the rest pass. Do not chase it as a regression.
+- `test_migrate_endpoint.py` now names `0020_shop_settings`; `test_review_fixes.py` applies the two newest migrations twice, so a new migration must be safe to run twice.
+- Three forked sub-agents with separate files worked without clashes. `store.ts`, `api.ts` and `styles.css` are shared by the customer page and the dashboard: give each file to one owner.

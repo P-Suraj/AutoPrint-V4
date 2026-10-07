@@ -82,6 +82,11 @@ public static class JobText
             : local.ToString("d MMM ", System.Globalization.CultureInfo.InvariantCulture) + time;
     }
 
+    /// <summary>For a request whose order has more than one file: how many, and what the whole order comes to.
+    /// Null for the usual one-file order. The total is missing when the server is older than this app.</summary>
+    public static (string Files, string? Total)? OrderLine(JobSummary j) => j.OrderFiles <= 1 ? null
+        : ($"One of {j.OrderFiles} files in this order", j.OrderTotalPaise is { } paise ? $"Order total {Money(paise)}" : null);
+
     private static string Fold(string s) => new(s.Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray());
 
     /// <summary>Find by order code (spaces, dashes and letter case ignored) or by part of the document name.</summary>

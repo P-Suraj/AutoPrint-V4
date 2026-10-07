@@ -441,3 +441,36 @@ This is also the first live run of the `status` and `migrate` commands, and it s
 **Slower than the run of 5 October** (completed 5.9 s after submit then, 11.2 s now). The difference is in the printing stage, about 6 s here against about 2 s in the local run of the same day. Cause not investigated: one run, on the founder's network, with the virtual printer. Compare again on the real printer before reading anything into it.
 
 Still not checked: a real phone on the live site, the installed 4.0.4 app, any physical printer.
+
+## Founder feedback build: shop settings, several files per order, search, installer link (7 October 2026, evening, local only)
+
+Branch `wip/2026-10-07-shop-settings-multi-file`. **Nothing here is deployed, migration 0020 is not applied live, and Windows app 4.0.5 is not installed anywhere.** Decisions: H-1 to H-6 and G-9 to G-11 in `docs/DECISIONS.md`. Built by the main session (database, API) and three sub-agents working at the same time (customer page, dashboard, Windows app); their reports are folded in below.
+
+### What was built
+- **Migration `0020_shop_settings.sql`:** `ap.shops.color_enabled` (default true); `ap.shop_settings` and `ap.shop_settings_update` (shop key; a changed price list is a new version, the old one is retired); `ap.agent_poll` gives each job `order_files` and `order_total_paise`. Safe to run twice (`IF NOT EXISTS`, `CREATE OR REPLACE`).
+- **API:** `GET` and `POST /v1/shop/settings` (30 saves per 10 minutes per address); `ShopPublic.color_available`; a colour item in a quote is refused with `color_not_available` (409) when the shop has colour off. The API also runs on a database without 0020: colour reads as available, jobs default to one file, and only the dashboard's settings panel fails to load.
+- **Customer page:** several PDFs in one order (at most 20), one card per file with its own colour, sides, copies and pages, "Use these settings for all files", "Add another file", one quote and one total. A shop with colour off shows "This shop prints in black & white only." The draft kept across a refresh now holds a list of files and still reads the old one-file shape.
+- **Dashboard:** panel "Prices and shop details" (name, colour on or off, one price per printed side for each of four kinds plus optional bulk prices) and "Download AutoPrint for Windows" in "Connect a computer", with the SmartScreen hint. New files `apps/web/src/rates.ts`, `shop-settings.css`.
+- **Windows app 4.0.5:** one search box in the tab row for both tabs (on Requests it filters the cards; Ctrl+F focuses it); a card of an order with several files says "One of N files in this order" and "Order total"; `build.ps1` also writes `dist\AutoPrintSetup.exe`. Installer `dist\AutoPrintSetup-4.0.5.exe`, 61,895,761 bytes, SHA-256 `52a9bc6ac062414c42490b7092b2f5305146a0c2d01f87f26db36cf5d71285dc` (reported by the sub-agent that built it; `dist\AutoPrintSetup.exe` is the same bytes).
+
+### What was checked, and how
+- **Python, whole suite once:** `apps\api\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider`: 302 passed, 3 failed. The 3 were expectations about the old shape (shop lookup without `color_available`, the job field list, and a test that applies the newest migrations twice, which is why 0020 was made re-runnable). After the fixes those files and the new `test_shop_settings.py` were run again: 34 passed, 1 failed (two jobs made in one transaction have no fixed order in the list; the test now sorts), then the 4 settings tests alone: 4 passed. The whole suite was not run a second time.
+- **Web:** `npx tsc --noEmit` clean, `npx vitest run` 83 passed in 7 files, `npm run build` built (sub-agent reports).
+- **Browser tests** (`e2e/run_web_e2e.py`, dev server): 17 passed, 1 failed on the second run, including the new "two files with different settings are sent as one order with one total". The failing one is the first test of the run ("a student sends a PDF…": "3 pages" not visible within 5 s, the page still says "Uploading…"). **It fails the same way on unchanged `main`** (checked by stashing this work and running the rig: 16 passed, 1 failed, same test), so it is a cold-start timing fault of the rig that was there before, not caused by this work. Not fixed. On the first run, made while the installer was being built, "an order that is gone says so on its own page" also failed once and passed afterwards.
+- **Screens looked at** (`E2E_TOOL=walk`, "no layout findings"): the dashboard with the new panel and the download button at 1280 and 360 px, and the one-file Settings step at 360 px.
+- **Windows app:** `dotnet test apps/desktop/tests/AutoPrint.Core.Tests`: 172 passed, 7 skipped (contract test included). `AutoPrint.exe --selftest-ui`: exit 0; the sub-agent looked at the pictures of a search on Requests with a three-file order, a search with no match, and the Finished search at 640 x 480.
+
+### Not verified
+- Anything on the live site or the live database. The settings panel was never saved against a running server by a person; only the API tests did it.
+- The several-files Settings step was not looked at as a picture (two cards, the accordion, the row with "Use these settings for all files" and "Remove" on a 320 px phone, the "Add another file" control next to the price bar). A real phone's file picker with several files.
+- The `color_not_available` answer on a page that was open before the shop switched colour off: built, no test.
+- Windows app 4.0.5 on a real screen, with a real several-file order, against a database with 0020, installed over 4.0.4; no Defender scan of the new installer; `live` and `soak` self-test modes not re-run.
+- The download button: no GitHub release exists yet, so the link answers "not found" until the founder publishes one (`docs/RUNBOOK.md` section 9).
+
+### Known and left open
+- A file the customer removes still counts towards the 20 files of an order (there is no delete-document route), and stays stored until the normal one-hour cleanup of unsent files.
+- The files of one order appear on the shop computer in no fixed order (same creation time; ordered by id).
+- A search left typed in the Windows app hides new requests that do not match; the tab count and the sound still announce them.
+- Dashboard: unsaved price edits are lost without a warning when the page is left; a failed load says "Could not load your prices" whatever the cause.
+- The first browser test of a rig run fails on a cold start (see above).
+- Colour on or off is not offered in the Windows app's printer choice (G-9).

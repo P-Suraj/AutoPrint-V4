@@ -40,6 +40,7 @@ CATALOG: dict[str, ApiError] = {e.code: e for e in [
     ApiError("upload_size_mismatch", 422, "The uploaded file does not match what was announced. Please try again."),
     ApiError("invalid_page_range", 422, "Page range must look like 1-5, 8, 11-15 and stay within the document."),
     ApiError("invalid_copies", 422, "Copies must be between 1 and 100."),
+    ApiError("color_not_available", 409, "This shop does not print in colour. Choose black & white."),
     ApiError("try_again", 503, "The service is busy. Please try again."),
     # shop/agent-facing
     ApiError("unauthorized", 401, "This device is not authorised."),

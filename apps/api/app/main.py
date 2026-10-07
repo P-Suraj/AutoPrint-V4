@@ -46,6 +46,9 @@ ERR = {400: {"model": s.ErrorResponse}, 401: {"model": s.ErrorResponse}, 404: {"
 
 CAN_CANCEL_JOB_STATES = {"awaiting_approval", "approved"}
 REPORT_STATEMENT_TIMEOUT_MS = 25_000     # founder reports read many rows; still under the host's 30 s request limit
+# Whether shop "s" prints in colour. Read through to_jsonb so the statement also runs on a database without
+# migration 0020 (no such column yet): there every shop prints in colour, as before.
+COLOR_ENABLED = "COALESCE((to_jsonb(s)->>'color_enabled')::boolean, true)"
 
 
 class ApiException(Exception):
@@ -210,11 +213,12 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
         code = shop_code.strip().upper()
         row = db.one(                                         # one round trip: the shop and whether a computer is online
             "SELECT s.name, s.is_active, EXISTS (SELECT 1 FROM ap.devices d WHERE d.shop_id = s.id AND d.status = 'active' "
-            "AND d.last_seen_at > now() - make_interval(secs => %s)) FROM ap.shops s WHERE s.code = %s",
+            f"AND d.last_seen_at > now() - make_interval(secs => %s)), {COLOR_ENABLED} FROM ap.shops s WHERE s.code = %s",
             (settings.agent_online_seconds, code))
         if row is None:
             raise ApiException("shop_not_found")
-        return s.ShopPublic(code=code, name=row[0], accepting_orders=bool(row[1]), agent_online=bool(row[2]))
+        return s.ShopPublic(code=code, name=row[0], accepting_orders=bool(row[1]), agent_online=bool(row[2]),
+                            color_available=bool(row[3]))
 
     @customer.get("/shops/{shop_code}/rates", response_model=s.RateCardPublic, operation_id="getShopRates")
     def get_rates(shop_code: str, response: Response):
@@ -360,32 +364,36 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
         row = in_one_trip(
             "WITH g AS MATERIALIZED (SELECT CASE WHEN ap.rate_hit(%s, 600, 300) IS NOT TRUE THEN 'rate_limited' "
             "WHEN ap.order_for_secret(%s) IS DISTINCT FROM %s THEN 'order_not_found' ELSE 'ok' END AS gate) "
-            "SELECT g.gate, rc.id, rc.version, rc.rules, "
+            "SELECT g.gate, rc.id, rc.version, rc.rules, rc.color_enabled, "
             "(SELECT jsonb_object_agg(d.id::text, d.page_count) FROM ap.documents d "
             "WHERE g.gate = 'ok' AND d.order_id = %s AND d.status = 'validated') "
-            "FROM g LEFT JOIN LATERAL (SELECT r.id, r.version, r.rules FROM ap.rate_cards r "
-            "JOIN ap.orders o ON o.shop_id = r.shop_id WHERE g.gate = 'ok' AND o.id = %s AND r.retired_at IS NULL LIMIT 1) rc ON true",
+            f"FROM g LEFT JOIN LATERAL (SELECT r.id, r.version, r.rules, {COLOR_ENABLED} AS color_enabled FROM ap.rate_cards r "
+            "JOIN ap.orders o ON o.shop_id = r.shop_id JOIN ap.shops s ON s.id = o.shop_id "
+            "WHERE g.gate = 'ok' AND o.id = %s AND r.retired_at IS NULL LIMIT 1) rc ON true",
             (limit_bucket(request, "quote"), sha256_hex(x_order_secret), order_id, order_id, order_id))
         if row is None:                                       # the steps one by one
             limit(request, "quote", 300, 600)
             authorize_order(order_id, x_order_secret)
-            rate = db.one("SELECT r.id, r.version, r.rules FROM ap.rate_cards r JOIN ap.orders o ON o.shop_id = r.shop_id "
+            rate = db.one(f"SELECT r.id, r.version, r.rules, {COLOR_ENABLED} FROM ap.rate_cards r "
+                          "JOIN ap.orders o ON o.shop_id = r.shop_id JOIN ap.shops s ON s.id = o.shop_id "
                           "WHERE o.id = %s AND r.retired_at IS NULL", (order_id,))
             pages = None if rate is None else {str(r[0]): r[1] for r in db.rows(
                 "SELECT id, page_count FROM ap.documents WHERE order_id = %s AND status = 'validated'", (order_id,))}
         elif row[0] != "ok":
             raise ApiException(row[0])
         else:
-            rate = None if row[1] is None else row[1:4]
-            pages = row[4] or {}
+            rate = None if row[1] is None else row[1:5]
+            pages = row[5] or {}
         if rate is None:
             raise ApiException("no_rate_card")
-        rate_id, version, rules = rate
+        rate_id, version, rules, color_enabled = rate
         items, total = [], 0
         for item in body.items:
             page_count = pages.get(str(item.document_id))
             if page_count is None:
                 raise ApiException("document_not_ready")
+            if item.options.color and not color_enabled:      # the page hides the choice; this is for a stale page
+                raise ApiException("color_not_available")
             try:
                 price = price_job(page_count=page_count, copies=item.options.copies, color=item.options.color,
                                   duplex=item.options.duplex, page_range=item.options.page_range, rules=rules)
@@ -591,6 +599,40 @@ def create_app(settings: Optional[Settings] = None, *, contract_only: bool = Fal
     def shop_me(x_shop_key: str = Header(...)):
         res = check(db.call("shop_login_resolve", sha256_hex(x_shop_key)))
         return s.ShopMe(shop_code=res["shop_code"], shop_name=res["shop_name"])
+
+    def shop_settings_view(res: dict) -> s.ShopSettings:
+        rules = res.get("rules")
+        try:
+            validate_rules(rules)
+        except PricingError:                                  # no price list yet, or one this page cannot show
+            rules = None
+        return s.ShopSettings(shop_code=res["shop_code"], shop_name=res["shop_name"], color_enabled=res["color_enabled"],
+                              rate_card_version=res.get("rate_card_version") if rules else None,
+                              bw=s.RateTable(**rules["bw"]) if rules else None,
+                              color=s.RateTable(**rules["color"]) if rules else None)
+
+    @shop.get("/settings", response_model=s.ShopSettings, operation_id="shopSettings")
+    def shop_settings(x_shop_key: str = Header(...)):
+        return shop_settings_view(check(db.call("shop_settings", sha256_hex(x_shop_key))))
+
+    @shop.post("/settings", response_model=s.ShopSettings, operation_id="shopSettingsUpdate")
+    def shop_settings_update(body: s.ShopSettingsUpdate, request: Request, x_shop_key: str = Header(...)):
+        """The shopkeeper renames the shop, says whether it prints in colour, and sets its prices. New prices are a
+        new version of the price list; a price a customer has already been shown stays as it was shown."""
+        limit(request, "shop-settings", 30, 600)
+        if (body.bw is None) != (body.color is None):         # a price list is always both tables
+            raise ApiException("invalid_request")
+        name = None if body.shop_name is None else body.shop_name.strip()
+        if name is not None and not name:
+            raise ApiException("invalid_request")
+        rules = None
+        if body.bw is not None:
+            rules = {"bw": body.bw.model_dump(), "color": body.color.model_dump()}
+            try:
+                validate_rules(rules)
+            except PricingError:
+                raise ApiException("invalid_items") from None
+        return shop_settings_view(check(db.call("shop_settings_update", sha256_hex(x_shop_key), name, body.color_enabled, rules)))
 
     @shop.get("/pair/{pair_code}", response_model=s.ShopPairLookup, operation_id="shopPairLookup")
     def shop_pair_lookup(pair_code: str, x_shop_key: str = Header(...)):

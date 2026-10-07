@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { BROKEN, EMPTY, LOCKED, PDF, SHOP, TEXT_FILE, shop } from "./fixtures";
+import { BROKEN, EMPTY, LOCKED, PDF, SHOP, TEXT_FILE, pdf, shop } from "./fixtures";
 
 /** Counts requests of one kind, so a test can say how many times the server was really asked. */
 function count(page: Page, method: string, path: RegExp): () => number {
@@ -163,7 +163,7 @@ test("a refresh at the Settings step keeps the uploaded file and the chosen sett
   await expect(page.getByRole("spinbutton", { name: "Copies" })).toHaveValue("2");
   await expect(page.getByRole("radio", { name: /^Colour/ })).toBeChecked();
   await expect(page.locator(".estimate strong")).toHaveText("₹60");
-  await expect(page.locator('input[type="file"]')).toHaveCount(0);                  // not asked for the file again
+  await expect(page.getByText("Choose a PDF")).toHaveCount(0);                      // not asked for the file again
 
   await page.getByRole("button", { name: "See exact price" }).click();
   await expect(page.locator(".total")).toHaveText("₹60");
@@ -171,6 +171,33 @@ test("a refresh at the Settings step keeps the uploaded file and the chosen sett
   await expect(page).toHaveURL(/\/o\/[0-9a-f-]{36}$/);
   await expect(page.getByText("Waiting for the shop to approve your print.")).toBeVisible();
   expect(orders()).toBe(1);                                                         // the same order all the way through
+});
+
+// ---- several files in one order
+
+test("two files with different settings are sent as one order with one total", async ({ page }) => {
+  const orders = count(page, "POST", NEW_ORDER);
+  const quotes = count(page, "POST", /^\/v1\/orders\/[^/]+\/quote$/);
+  await uploadThreePagePdf(page);
+  await page.getByLabel("Add another PDF").setInputFiles(pdf("blank(2)", "two.pdf"));
+  await expect(page.getByText("two.pdf")).toBeVisible();
+  await expect(page.locator(".estimate strong")).toHaveText("₹10");                // 3 sides + 2 sides, ₹2 each
+  await expect(page.locator(".estimate")).toContainText("2 files · 5 sides");
+
+  // the first file stays open; the second gets its own settings
+  await page.getByRole("button", { name: "Print settings for two.pdf" }).click();
+  await page.getByRole("radio", { name: /^Colour/ }).check();
+  await expect(page.locator(".estimate strong")).toHaveText("₹26");                // 3 x ₹2 + 2 x ₹10
+
+  await page.getByRole("button", { name: "See exact price" }).click();
+  await expect(page.locator(".total")).toHaveText("₹26");
+  await expect(page.locator(".quote")).toContainText("2 files · pay at the counter");
+  await page.getByRole("button", { name: "Send to shop" }).click();
+  await expect(page).toHaveURL(/\/o\/[0-9a-f-]{36}$/);
+  await expect(page.locator(".jobs > li")).toHaveCount(2);
+  await expect(page.locator(".pay")).toContainText("₹26");
+  expect(orders()).toBe(1);
+  expect(quotes()).toBe(1);
 });
 
 // ---- impatient fingers

@@ -41,8 +41,23 @@ describe("the orders this phone can go back to", () => {
   });
 });
 
-describe("the file being prepared in this tab", () => {
-  const draft: Draft = { shopCode: "TST001", orderId: "id-1", shortCode: "K1QD", documentId: "doc-1", pageCount: 3, fileName: "a.pdf", copies: 2, color: false, duplex: true, pageRange: "1-2" };
+describe("the files being prepared in this tab", () => {
+  const doc = { documentId: "doc-1", pageCount: 3, fileName: "a.pdf", copies: 2, color: false, duplex: true, pageRange: "1-2" };
+  const draft: Draft = { shopCode: "TST001", orderId: "id-1", shortCode: "K1QD", docs: [doc, { ...doc, documentId: "doc-2", fileName: "b.pdf", color: true, pageRange: null }] };
+
+  it("a tab left open from before several files were possible keeps its one file", () => {
+    saveSecret("id-1", "s1");
+    sessionStorage.setItem("ap.draft", JSON.stringify({ shopCode: "TST001", orderId: "id-1", shortCode: "K1QD", ...doc }));
+    expect(loadDraft("TST001")).toEqual({ shopCode: "TST001", orderId: "id-1", shortCode: "K1QD", docs: [doc] });
+    sessionStorage.setItem("ap.draft", JSON.stringify({ shopCode: "TST001", orderId: "id-1", shortCode: "K1QD", ...doc, documentId: null, pageCount: 0 }));
+    expect(loadDraft("TST001")?.docs).toEqual([]);
+  });
+
+  it("drops a damaged file entry instead of breaking the page", () => {
+    saveSecret("id-1", "s1");
+    sessionStorage.setItem("ap.draft", JSON.stringify({ ...draft, docs: [doc, { documentId: 7 }, null] }));
+    expect(loadDraft("TST001")?.docs).toEqual([doc]);
+  });
 
   it("comes back after a refresh, for the same shop only", () => {
     saveSecret("id-1", "s1"); saveDraft(draft);

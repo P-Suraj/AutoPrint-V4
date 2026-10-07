@@ -69,7 +69,14 @@ internal static partial class SelfTest
     private static readonly JobSummary W1 = Job("K7QD", "Thesis final draft.pdf", 48, 2, false, true, null, 9600, JobStatus.AwaitingApproval, 2);
     private static readonly JobSummary W2 = Job("M2XP", "Lab record - Physics practical observations and readings (semester 3) FINAL v2.pdf", 12, 1, true, false, "1-4, 9", 5000, JobStatus.AwaitingApproval, 9);
     private static readonly JobSummary W3 = Job("R8TA", "ID card.pdf", 1, 4, true, false, null, 4000, JobStatus.AwaitingApproval, 53);
-    private static readonly JobSummary P1 = Job("B4HN", "Resume.pdf", 2, 3, false, false, null, 1200, JobStatus.Printing, 4, 1);
+    // one order with three files, each with its own settings: the cards share the code and say what the order comes to
+    private static readonly JobSummary[] Many =
+    [
+        Job("G5LT", "Unit 1 notes.pdf", 14, 1, false, true, null, 1400, JobStatus.AwaitingApproval, 1) with { OrderFiles = 3, OrderTotalPaise = 7400 },
+        Job("G5LT", "Cover page.pdf", 1, 1, true, false, null, 1000, JobStatus.AwaitingApproval, 1) with { OrderFiles = 3, OrderTotalPaise = 7400 },
+        Job("G5LT", "Question bank.pdf", 25, 2, false, false, null, 5000, JobStatus.AwaitingApproval, 1) with { OrderFiles = 3, OrderTotalPaise = 7400 },
+    ];
+    private static readonly JobSummary P1 =Job("B4HN", "Resume.pdf", 2, 3, false, false, null, 1200, JobStatus.Printing, 4, 1);
     private static readonly JobSummary A1 = Job("C9WL", "Assignment 4.pdf", 6, 1, false, true, null, 600, JobStatus.Approved, 3);
     private static readonly JobSummary N1 = Job("F3ZE", "Project report.pdf", 30, 1, false, true, null, 3000, JobStatus.NeedsAttention, 11, 1);
     private static readonly JobSummary[] Done =
@@ -119,7 +126,10 @@ internal static partial class SelfTest
                 runs: new RunResult(RunKind.Uncertain, N1.JobId, "still_in_queue_when_wait_ended", null, PrinterName)))),
             ("24-print-again-while-still-in-windows-queue", () => MainWith(w => w.Demo(Shop, State(true, N1, W1), Fine, confirm: N1.JobId, stillQueued: N1.JobId))),
             ("25-print-again-remove-failed", () => MainWith(w => w.Demo(Shop, State(true, N1, W1), Fine, confirm: N1.JobId, stillQueued: N1.JobId, removeFailed: true))),
-            ("16-preview", () => new PreviewWindow(W2, null, null, null, TestPage.Build("AutoPrint preview self-test", "Made-up page. No customer document is used."))),
+            ("27-requests-search", () => MainWith(w => w.Demo(Shop, State(true, [W1, W2, .. Many, N1, .. Done]), Fine, search: "g5lt"))),
+            ("28-requests-search-no-match", () => MainWith(w => w.Demo(Shop, State(true, [W1, W2, .. Many, .. Done]), Fine, search: "K7QA"))),
+            ("29-order-with-several-files", () => MainWith(w => w.Demo(Shop, State(true, [W1, .. Many]), Fine))),
+            ("16-preview",() => new PreviewWindow(W2, null, null, null, TestPage.Build("AutoPrint preview self-test", "Made-up page. No customer document is used."))),
         };
         foreach (var (name, make) in scenes)
             foreach (var (tag, small, dpi) in new[] { ("100", false, 96.0), ("150", false, 144.0), ("min", true, 96.0) })
